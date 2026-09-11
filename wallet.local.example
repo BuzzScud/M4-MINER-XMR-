@@ -1,0 +1,4 @@
+# Public Monero receive address only.
+# Copy this file to wallet.local and replace the line below.
+# Never put spend keys, view keys, or seed words here.
+YOUR_XMR_ADDRESS

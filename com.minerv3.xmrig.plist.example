@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.minerv3.xmrig</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>/PATH/TO/XMR MINER/bin/xmrig</string>
+        <string>-o</string><string>gulf.moneroocean.stream:20016</string>
+        <string>-u</string><string>YOUR_XMR_ADDRESS.worker</string>
+        <string>-p</string><string>x</string>
+        <string>-a</string><string>rx/0</string>
+        <string>-k</string>
+        <string>--tls</string>
+        <string>--randomx-mode=fast</string>
+        <string>--randomx-init=10</string>
+        <string>--cpu-priority=4</string>
+        <string>--threads=10</string>
+        <string>--cpu-no-yield</string>
+        <string>--http-host=127.0.0.1</string>
+        <string>--http-port=18088</string>
+        <string>--donate-level=0</string>
+        <string>--print-time=30</string>
+        <string>--no-color</string>
+    </array>
+    <key>WorkingDirectory</key><string>/PATH/TO/XMR MINER</string>
+    <key>RunAtLoad</key><false/>
+    <key>KeepAlive</key><false/>
+    <key>ThrottleInterval</key><integer>30</integer>
+    <key>ProcessType</key><string>Standard</string>
+    <key>LowPriorityIO</key><false/>
+    <key>StandardOutPath</key><string>/PATH/TO/XMR MINER/logs/xmrig.log</string>
+    <key>StandardErrorPath</key><string>/PATH/TO/XMR MINER/logs/xmrig.err.log</string>
+</dict>
+</plist>

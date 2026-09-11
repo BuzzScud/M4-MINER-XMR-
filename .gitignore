@@ -1,0 +1,19 @@
+.DS_Store
+**/.DS_Store
+**/__pycache__/
+*.pyc
+
+# payout + machine-local job file
+wallet.local
+com.minerv3.xmrig.plist
+flex.on
+logs/*.log
+logs/*.pid
+
+# xmrig source checkout lives locally; GitHub ships bin/xmrig
+vendor/
+
+# extra local binaries / bundles
+bin/xmrig.clang17
+bin/xmrig.prebuilt
+XMR-Miner-Portable.zip

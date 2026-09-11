@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RandomX · how a hash is made</title>
+<style>
+  :root {
+    --bg:#0d0e11; --bar:#111216; --panel:#111216; --card:#14151a; --sunk:#0e0f14;
+    --line:rgba(240,238,230,.10); --ink:#f0eee6; --ink2:#c4c2b9; --muted:#84837c; --faint:#55544f;
+    --gold:#d9a441; --teal:#26c6c0; --green:#2fbf85; --pink:#d55181; --violet:#9085e9; --blue:#3987e5;
+    --mono: ui-monospace, "IBM Plex Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 13px var(--sans); }
+  button, select, input { font: 12px var(--mono); }
+  button {
+    background: #181a20; color: var(--ink2); border: 1px solid var(--line);
+    border-radius: 7px; padding: 6px 11px; cursor: pointer;
+  }
+  button:hover { color: var(--ink); background: #1e2028; }
+  button.on { background: #1d2a40; color: #cfe0ff; }
+  button.play.on { background: #14332a; color: #7de0b8; }
+  .top {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+    padding: 8px 12px; background: var(--bar); border-bottom: 1px solid var(--line);
+  }
+  .top b { font: 600 13px var(--mono); margin-right: 6px; }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .livebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-left: auto; font: 12px var(--mono); }
+  .livebar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; }
+  .livebar .dot.off { background: #555; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg button { border: 0; border-right: 1px solid var(--line); border-radius: 0; }
+  .seg button:last-child { border-right: 0; }
+  .stage { height: calc(100% - 46px); position: relative; }
+  .pane { display: none; height: 100%; }
+  .pane.on { display: flex; }
+  .side {
+    width: 320px; overflow: hidden; border-right: 1px solid var(--line);
+    padding: 10px 12px 12px; flex-shrink: 0; background: var(--bg);
+    display: flex; flex-direction: column; gap: 8px; min-height: 0;
+  }
+  .wave { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  h1 { font: 600 13px var(--mono); margin: 0; }
+  h2 { font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+  p, li { color: var(--ink2); line-height: 1.4; }
+  .lede { margin: 0; font: 11px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 0; }
+  .metrics { display: grid; grid-template-columns: 5.4em 1fr 5.4em 1fr; gap: 3px 8px; align-items: baseline; font: 11px var(--mono); }
+  .metrics .k { color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .metrics .v { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .metrics .v.gold { color: var(--gold); }
+  .metrics .v.teal { color: var(--teal); }
+  .metrics .v.green { color: var(--green); }
+  .metrics .v.pink { color: var(--pink); }
+  .metrics .v.violet { color: var(--violet); }
+  .op {
+    grid-column: 1 / -1; font: 10.5px var(--mono); color: var(--gold);
+    background: var(--sunk); border: 1px solid var(--line); border-radius: 5px;
+    padding: 5px 8px; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .regs {
+    display: grid; grid-template-columns: 1.6em 1fr 1.6em 1fr; gap: 0 6px;
+    font: 10px var(--mono); font-variant-numeric: tabular-nums; line-height: 1.45;
+  }
+  .regs .rn { color: var(--muted); }
+  .regs .rv { color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+  .regs .rv.hot { color: var(--gold); }
+  .beats { list-style: none; margin: 0; padding: 0; font: 10px var(--mono); line-height: 1.35; }
+  .beats li { display: grid; grid-template-columns: 1.3em 1fr; gap: 6px; padding: 1px 0; color: var(--faint); }
+  .beats li.on { color: var(--gold); }
+  .beats li.done { color: var(--ink2); }
+  .beats .n { color: inherit; }
+  .lotbar { position: relative; height: 7px; background: #1a1c24; border-radius: 3px; margin-top: 7px; }
+  .lotbar .tgt { position: absolute; left: 0; top: 0; bottom: 0; background: var(--gold); opacity: .85; width: 4%; border-radius: 3px 0 0 3px; }
+  .lotbar .tick { position: absolute; top: -3px; width: 2px; height: 13px; background: var(--ink); }
+  canvas { display: block; width: 100%; height: 100%; background: #0b0c10; }
+  .hud {
+    display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+    padding: 8px 12px; border-bottom: 1px solid var(--line); font: 11.5px var(--mono); color: var(--ink2);
+    background: var(--panel);
+  }
+  .hud b { color: var(--ink); font-weight: 600; }
+  .hud .gold { color: var(--gold); }
+  .hud .teal { color: var(--teal); }
+  .hud .green { color: var(--green); }
+  .formula {
+    background: var(--sunk); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; overflow-x: auto; color: var(--ink); line-height: 1.75;
+    font: 12px var(--mono); margin: 8px 0 12px;
+  }
+  .formula .sym { color: var(--gold); }
+  .formula .c { color: var(--muted); }
+  .note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .helper { display: none; height: 100%; overflow: auto; padding: 16px 18px 80px; }
+  .helper.on { display: block; }
+  .helper h1 { font: 600 16px var(--mono); margin: 0 0 8px; }
+  .helper h2 { font: 600 11px var(--mono); margin: 0 0 10px; }
+  .wrap { max-width: 1280px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .hcard { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .hcard h2 { margin-top: 0; }
+  .hcard canvas { height: auto; background: var(--sunk); border-radius: 8px; border: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; font: 12px var(--mono); }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; letter-spacing: .04em; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font: 11px var(--mono); margin: 8px 0; }
+  .doti { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  label { color: var(--muted); font: 11px var(--mono); display: flex; gap: 6px; align-items: center; }
+  input[type="range"] { width: 140px; accent-color: var(--gold); }
+  footer { margin-top: 18px; color: var(--faint); font: 11px var(--mono); line-height: 1.5; }
+  .warn { color: var(--gold); }
+  @media (max-width: 980px) {
+    .stage { height: calc(100% - 88px); }
+    #p-made.on { flex-direction: column; }
+    .side { width: 100%; max-height: 42%; overflow: hidden; border-right: 0; border-bottom: 1px solid var(--line); }
+    .grid, .two { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <b>RandomX</b>
+  <div class="tabs" id="tabs">
+    <button data-t="made" class="on">How it's made</button>
+    <button data-t="helper">Cycle helper</button>
+  </div>
+  <div class="livebar">
+    <div class="seg" id="speeds">
+      <button data-sp="0.4">slow</button>
+      <button data-sp="1" class="on">1×</button>
+      <button data-sp="3">3×</button>
+      <button data-sp="10">10×</button>
+    </div>
+    <button class="play on" id="play">▶ run</button>
+    <button id="step">step</button>
+    <button id="win">force find</button>
+    <span class="dot" id="livedot"></span>
+    <span id="liveword">hashing</span>
+  </div>
+</div>
+
+<div class="stage">
+  <div id="p-made" class="pane on">
+    <div class="side">
+      <div>
+        <h1>How a hash is made</h1>
+        <p class="lede" id="penlive">4.6.2 · rings only</p>
+      </div>
+
+      <div class="card">
+        <h2>Machine</h2>
+        <div class="metrics">
+          <span class="k">dataset</span><span class="v gold">96 × 64 B</span>
+          <span class="k">stands for</span><span class="v">2 GiB</span>
+          <span class="k">scratch</span><span class="v teal">L3 2 MiB</span>
+          <span class="k">masks</span><span class="v teal">L2 256K · L1 16K</span>
+          <span class="k">VM</span><span class="v violet">8 int + 12 float</span>
+          <span class="k">work</span><span class="v">8 × 2048</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Attempt</h2>
+        <div class="metrics">
+          <div class="op" id="m-op">—</div>
+          <span class="k">phase</span><span class="v teal" id="m-phase">—</span>
+          <span class="k">epoch K</span><span class="v" id="m-epoch">64 / 2048</span>
+          <span class="k">nonce</span><span class="v" id="m-nonce">—</span>
+          <span class="k">prog</span><span class="v gold" id="m-prog">—</span>
+          <span class="k">ic</span><span class="v" id="m-iter">—</span>
+          <span class="k">item</span><span class="v teal" id="m-addr">—</span>
+          <span class="k">ma</span><span class="v violet" id="m-ma">—</span>
+          <span class="k">mx</span><span class="v violet" id="m-mx">—</span>
+          <span class="k">tries</span><span class="v" id="m-tries">0</span>
+          <span class="k">finds</span><span class="v green" id="m-finds">0</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Beat · 4.6.2 · all 13</h2>
+        <ol class="beats" id="beats">
+          <li data-b="0"><span class="n">1</span><span>spAddr ⊕= r[s0] ⊕ r[s1]</span></li>
+          <li data-b="0"><span class="n">2</span><span>r0…r7 ⊕= P[spAddr0] 64 B L3</span></li>
+          <li data-b="0"><span class="n">3</span><span>f,e ← P[spAddr1] IEEE pairs</span></li>
+          <li data-b="1"><span class="n">4</span><span>execute 256 instructions</span></li>
+          <li data-b="2"><span class="n">5</span><span>mt ← ma · mx ⊕= r[s2] ⊕ r[s3]</span></li>
+          <li data-b="2"><span class="n">6</span><span>prefetch D[offset + mx]</span></li>
+          <li data-b="2"><span class="n">7</span><span>r0…r7 ⊕= D[offset + mt] 64 B</span></li>
+          <li data-b="2"><span class="n">8</span><span>swap(mx, ma)</span></li>
+          <li data-b="3"><span class="n">9</span><span>P[spAddr1] ← r0…r7</span></li>
+          <li data-b="3"><span class="n">10</span><span>f ← f ⊕ e  (v1)</span></li>
+          <li data-b="3"><span class="n">11</span><span>P[spAddr0] ← f0…f3</span></li>
+          <li data-b="3"><span class="n">12</span><span>spAddr0, spAddr1 ← 0</span></li>
+          <li data-b="3"><span class="n">13</span><span>ic ← ic − 1</span></li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h2>Lottery</h2>
+        <div class="metrics">
+          <span class="k">R</span><span class="v" id="m-hash">—</span>
+          <span class="k">R &lt; T</span><span class="v" id="m-cmp">—</span>
+        </div>
+        <div class="lotbar" id="lotbar"><i class="tgt" id="lottgt"></i><i class="tick" id="lottick"></i></div>
+      </div>
+
+      <div class="card">
+        <h2>Registers</h2>
+        <div class="regs" id="regfile"></div>
+        <h2 style="margin-top:6px">f / e</h2>
+        <div class="regs" id="fpfile"></div>
+      </div>
+    </div>
+    <div class="wave">
+      <div style="flex:1;min-height:0;position:relative">
+        <canvas id="made"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div id="p-helper" class="helper">
+    <div class="wrap">
+      <h1 style="margin-bottom:6px">Cycle helper · spec 4.6.2</h1>
+      <p class="note" style="margin-bottom:16px;max-width:78ch">
+        The construction on the other tab is now driven by this loop, not a toy RNG.
+        Opcode frequencies are Table 5.2–5.5. Register file is 256 bytes.
+        Still stubbed: Argon2d, AesGenerator, AesHash, Blake2b.
+      </p>
+
+      <div class="grid">
+        <section class="hcard">
+          <h2>8-fold program clock</h2>
+          <canvas id="clock" width="640" height="640"></canvas>
+          <div class="legend">
+            <span><i class="doti" style="background:var(--gold)"></i>this program</span>
+            <span><i class="doti" style="background:var(--teal)"></i>ic 2048→0</span>
+            <span><i class="doti" style="background:var(--green)"></i>find</span>
+            <span><i class="doti" style="background:var(--violet)"></i>epoch (K)</span>
+          </div>
+          <p class="note" id="clockNote"></p>
+        </section>
+        <section class="hcard">
+          <h2>Lottery · R mapped onto a circle</h2>
+          <canvas id="lot" width="560" height="560"></canvas>
+          <div class="row">
+            <label>difficulty D
+              <input id="diff" type="range" min="8" max="256" value="48"/>
+              <span id="diffV">48</span>
+            </label>
+          </div>
+          <p class="note">The check is the real one: interpret(R) &lt; 2<sup>256</sup>/D. R itself is a stand-in fold, so darts are not Monero shares.</p>
+        </section>
+        <section class="hcard">
+          <h2>Opcode mix this program</h2>
+          <canvas id="mix" width="560" height="280"></canvas>
+          <p class="note" id="mixNote">Counts vs Table 5.x expected frequency × 256.</p>
+        </section>
+      </div>
+
+      <div class="two">
+        <section class="hcard">
+          <h2>The hash (spec §2) · stubs marked</h2>
+          <div class="formula">
+            <span class="c">// slow — still stubbed here</span><br>
+            K  →  Argon2d  →  Cache 256 MiB  →  Dataset<br>
+            <span class="c">// this page: 96 items from spec 7.3 init constants</span><br><br>
+            S  =  Hash512(H)                 <span class="c">// stub PRNG seed</span><br>
+            P  =  AesGenerator1R(S)          <span class="c">// stub: fill 2 MiB</span><br>
+            gen4 = AesGenerator4R            <span class="c">// stub: 2176 program bytes</span><br><br>
+            <span class="sym">for i in 0..7:</span><br>
+            &nbsp;&nbsp;program VM from gen4          <span class="c">// §4.5  real decode</span><br>
+            &nbsp;&nbsp;execute VM                    <span class="c">// §4.6  real loop</span><br>
+            &nbsp;&nbsp;S = Hash512(RegisterFile)     <span class="c">// stub mix</span><br><br>
+            A  =  AesHash1R(P)               <span class="c">// stub sample</span><br>
+            R  =  Hash256(RegisterFile)      <span class="c">// stub 64-bit fold</span><br>
+            <span class="sym">valid</span> iff interpret(R) &lt; 2<sup>256</sup> / D
+          </div>
+        </section>
+        <section class="hcard">
+          <h2>One iteration · spec 4.6.2 verbatim</h2>
+          <div class="formula" id="iterFormula">
+            <span class="c">// ic starts at 2048; r0…r7 start at 0</span><br>
+            1. spAddr0 ⊕= lo32(r[s0] ⊕ r[s1])<br>
+            &nbsp;&nbsp;&nbsp;spAddr1 ⊕= hi32(r[s0] ⊕ r[s1])<br>
+            2. r0…r7 ⊕= P[spAddr0 &amp; L3_64]     <span class="c">// 8 × u64</span><br>
+            3. f0…e3  ←  P[spAddr1 &amp; L3_64]     <span class="c">// IEEE pairs</span><br>
+            4. execute ProgramBuffer[0..255]<br>
+            5. mt ← ma;  mx ⊕= lo32(r[s2] ⊕ r[s3])<br>
+            6. prefetch D[offset + mx % |D|]<br>
+            7. r0…r7 ⊕= D[offset + mt % |D|]    <span class="c">// 64 B DRAM</span><br>
+            8. swap(mx, ma)<br>
+            9. P[spAddr1] ← r0…r7<br>
+            10. fi ← fi ⊕ ei                    <span class="c">// v1</span><br>
+            11. P[spAddr0] ← f0…f3<br>
+            12. spAddr0, spAddr1 ← 0<br>
+            13. ic ← ic − 1
+          </div>
+          <p class="note" id="iterNote"></p>
+        </section>
+      </div>
+
+      <section class="hcard">
+        <h2>What is real on this page</h2>
+        <table>
+          <thead><tr><th>piece</th><th>this page</th><th>rx/0 consensus</th></tr></thead>
+          <tbody>
+            <tr><td>Opcode table 5.2–5.5</td><td>256 opcodes, 29 ops, exact frequencies</td><td>same</td></tr>
+            <tr><td>Register file</td><td>r0–r7 u64, f/e/a pairs of f64, ma mx fprc</td><td>same layout, 256 B</td></tr>
+            <tr><td>Scratchpad</td><td>2,097,152 B · L1 16K · L2 256K · L3 2M masks</td><td>same</td></tr>
+            <tr><td>4.6.2 loop</td><td>all 13 steps, 2048×8</td><td>same</td></tr>
+            <tr><td>Dataset XOR</td><td>64 B into r0–r7</td><td>same, ~33.6e6 items</td></tr>
+            <tr><td>CBRANCH / IMUL_RCP / FSCAL</td><td>implemented as spec</td><td>same</td></tr>
+            <tr><td>IEEE rounding modes</td><td>fprc stored; JS is always ties-to-even</td><td>4 modes via MXCSR</td></tr>
+            <tr><td>Dataset contents</td><td>96 items, spec 7.3 init constants, no Argon2d</td><td>Argon2d + 8× SuperscalarHash</td></tr>
+            <tr><td>Program bytes</td><td>splitmix64 stand-in for AesGenerator4R</td><td>AES rounds, fixed keys</td></tr>
+            <tr><td>Final R</td><td>64-bit mix of register file + scratch samples</td><td>Blake2b-256</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <footer>
+        Inner loop: RandomX spec chapter 4.6.2 (tevador). Frequencies: tables 5.2.1, 5.3.1, 5.4.1, 5.5.1.
+        Dataset item init constants: spec 7.3. This page does not mine.
+      </footer>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const U64MASK = (1n << 64n) - 1n;
+  const u64 = (x) => BigInt.asUintN(64, x);
+  const lo32 = (x) => Number(x & 0xFFFFFFFFn) >>> 0;
+  const hi32 = (x) => Number((x >> 32n) & 0xFFFFFFFFn) >>> 0;
+  const se32 = (u) => BigInt.asUintN(64, BigInt(u | 0));
+  const u32 = (x) => x >>> 0;
+  function hex32(n) { return (n >>> 0).toString(16).padStart(8, "0"); }
+  function hex64(x) { return x.toString(16).padStart(16, "0"); }
+
+  const SP_SIZE = 2097152;
+  const MASK_L1 = (16384 - 1) & ~7;
+  const MASK_L2 = (262144 - 1) & ~7;
+  const MASK_L3 = (2097152 - 1) & ~7;
+  const MASK_L3_64 = (2097152 - 1) & ~63;
+  const N_DS = 96;
+  const DS_ITEM = 64;
+  const DS_BASE = N_DS * DS_ITEM;
+  const PROG_SIZE = 256;
+  const PROG_ITERS = 2048;
+  const PROG_COUNT = 8;
+  const N_SP_VIS = 48;
+  const JUMP_BITS = 8;
+  const JUMP_OFFSET = 8;
+
+  const FREQ = [
+    ["IADD_RS", 16], ["IADD_M", 7], ["ISUB_R", 16], ["ISUB_M", 7],
+    ["IMUL_R", 16], ["IMUL_M", 4], ["IMULH_R", 4], ["IMULH_M", 1],
+    ["ISMULH_R", 4], ["ISMULH_M", 1], ["IMUL_RCP", 8], ["INEG_R", 2],
+    ["IXOR_R", 15], ["IXOR_M", 5], ["IROR_R", 8], ["IROL_R", 2], ["ISWAP_R", 4],
+    ["FSWAP_R", 4], ["FADD_R", 16], ["FADD_M", 5], ["FSUB_R", 16], ["FSUB_M", 5],
+    ["FSCAL_R", 6], ["FMUL_R", 32], ["FDIV_M", 4], ["FSQRT_R", 6],
+    ["CFROUND", 1], ["CBRANCH", 25], ["ISTORE", 16]
+  ];
+  const OPNAME = new Array(256);
+  const EXPECT = {};
+  {
+    let op = 0;
+    for (const [name, n] of FREQ) {
+      EXPECT[name] = n;
+      for (let i = 0; i < n; i++) OPNAME[op++] = name;
+    }
+  }
+
+  const f64buf = new ArrayBuffer(8);
+  const f64dv = new DataView(f64buf);
+  function f64bits(x) { f64dv.setFloat64(0, x, true); return f64dv.getBigUint64(0, true); }
+  function bitsf64(b) { f64dv.setBigUint64(0, b, true); return f64dv.getFloat64(0, true); }
+  function xorF64(a, b) { return bitsf64(f64bits(a) ^ f64bits(b)); }
+
+  function mulh(a, b, signed) {
+    if (signed) {
+      return BigInt.asUintN(64, (BigInt.asIntN(64, a) * BigInt.asIntN(64, b)) >> 64n);
+    }
+    return (a * b) >> 64n;
+  }
+  function rotR(x, n) {
+    n = BigInt(n & 63);
+    if (n === 0n) return x;
+    return u64((x >> n) | (x << (64n - n)));
+  }
+  function rotL(x, n) {
+    n = BigInt(n & 63);
+    if (n === 0n) return x;
+    return u64((x << n) | (x >> (64n - n)));
+  }
+  function reciprocal(d) {
+    d = d >>> 0;
+    if (d === 0 || (d & (d - 1)) === 0) return 0n;
+    let x = 63 + (32 - Math.clz32(d));
+    let rcp = (1n << BigInt(x)) / BigInt(d);
+    if (rcp >= (1n << 64n)) rcp = (1n << BigInt(x - 1)) / BigInt(d);
+    return rcp;
+  }
+
+  const MUL0 = 6364136223846793005n;
+  const SS_XOR = [
+    9298411001130361340n, 12065312585734608966n, 9306329213124626780n,
+    5281919268842080866n, 10536153434571861004n, 3398623926847679864n,
+    9549104520008361294n
+  ];
+
+  let rng64 = 0xC0FFEE123456789n;
+  function seedRng(x) { rng64 = u64(BigInt(x) ^ 0x9e3779b97f4a7c15n); }
+  function nextU64() {
+    rng64 = u64(rng64 + 0x9e3779b97f4a7c15n);
+    let z = rng64;
+    z = u64((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n);
+    z = u64((z ^ (z >> 27n)) * 0x94d049bb133111ebn);
+    return u64(z ^ (z >> 31n));
+  }
+  function nextU32() { return Number(nextU64() & 0xFFFFFFFFn) >>> 0; }
+
+  const spBuf = new ArrayBuffer(SP_SIZE);
+  const sp = new DataView(spBuf);
+  const sp32 = new Uint32Array(spBuf);
+  const dsBuf = new ArrayBuffer(DS_BASE);
+  const ds = new DataView(dsBuf);
+  const progBuf = new ArrayBuffer(PROG_SIZE * 8);
+  const prog = new Uint8Array(progBuf);
+  const progDv = new DataView(progBuf);
+  const cfgBuf = new ArrayBuffer(128);
+  const cfg = new DataView(cfgBuf);
+
+  const VM = {
+    r: new Array(8).fill(0n),
+    f: new Float64Array(8),
+    e: new Float64Array(8),
+    a: new Float64Array(8),
+    ma: 0, mx: 0, mt: 0, fprc: 0,
+    spAddr0: 0, spAddr1: 0, ic: 0,
+    readReg: [0, 2, 4, 6],
+    datasetOffset: 0,
+    eFrac: [0, 0], eExp: [0, 0]
+  };
+
+  const S = {
+    playing: true, speed: 1, forceWin: false,
+    phase: "scratch", beat: 0, hold: 0,
+    nonce: 0x00a31f2c, program: 0, key: 1,
+    op: "fill scratchpad", lastIns: "",
+    dsItem: 0, spAddr: 0, spLvl: 3, pc: 0,
+    probes: [], sparks: [], darts: [],
+    hash: 0n, found: false, tries: 0, finds: 0, epoch: 64, demoD: 48, t: 0,
+    counts: Object.create(null),
+    mixTotal: 0
+  };
+
+  function seedDataset() {
+    seedRng(S.key * 0xA5A5 + 17);
+    for (let n = 0; n < N_DS; n++) {
+      let r0 = u64(BigInt(n + 1) * MUL0);
+      const regs = [r0];
+      for (let i = 0; i < 7; i++) regs.push(u64(r0 ^ SS_XOR[i]));
+      const mix = nextU64();
+      for (let i = 0; i < 8; i++) {
+        regs[i] = u64(regs[i] + (mix << BigInt(i % 7)) + BigInt(S.key));
+        ds.setBigUint64(n * 64 + i * 8, regs[i], true);
+      }
+    }
+  }
+
+  function fillScratchpad() {
+    seedRng(S.nonce ^ (S.key << 8));
+    for (let i = 0; i < sp32.length; i++) sp32[i] = nextU32();
+  }
+
+  function emitProgram() {
+    seedRng(u64(BigInt(S.nonce) * 0x100000001n + BigInt(S.program) * 0x9e3779b97f4a7c15n + BigInt(S.key)));
+    for (let i = 0; i < 16; i++) cfg.setBigUint64(i * 8, nextU64(), true);
+    for (let i = 0; i < PROG_SIZE * 8; i += 8) progDv.setBigUint64(i, nextU64(), true);
+    for (let i = 0; i < 4; i++) {
+      VM.a[i * 2] = initA(cfg.getBigUint64(i * 16, true));
+      VM.a[i * 2 + 1] = initA(cfg.getBigUint64(i * 16 + 8, true));
+    }
+    VM.ma = cfg.getUint32(64, true);
+    VM.mx = cfg.getUint32(80, true);
+    const bits = Number(cfg.getBigUint64(96, true) & 0xFn);
+    VM.readReg = [bits & 1 ? 1 : 0, bits & 2 ? 3 : 2, bits & 4 ? 5 : 4, bits & 8 ? 7 : 6];
+    const q13 = cfg.getBigUint64(104, true);
+    VM.datasetOffset = Number(q13 % 17n) * 64;
+    const q14 = cfg.getBigUint64(112, true);
+    const q15 = cfg.getBigUint64(120, true);
+    VM.eFrac[0] = Number(q14 & 0x3FFFFFn);
+    VM.eExp[0] = Number((q14 >> 60n) & 0xFn);
+    VM.eFrac[1] = Number(q15 & 0x3FFFFFn);
+    VM.eExp[1] = Number((q15 >> 60n) & 0xFn);
+    VM.fprc = 0;
+    VM.ic = PROG_ITERS;
+    VM.spAddr0 = VM.mx;
+    VM.spAddr1 = VM.ma;
+    for (let i = 0; i < 8; i++) VM.r[i] = 0n;
+    S.counts = Object.create(null);
+    S.mixTotal = 0;
+  }
+
+  function initA(q) {
+    const frac = q & ((1n << 52n) - 1n);
+    const exp = Number((q >> 59n) & 31n);
+    return bitsf64((BigInt(exp + 1023) << 52n) | frac);
+  }
+
+  function cvtE(i32, half) {
+    let b = f64bits(i32 | 0);
+    b &= ~(1n << 63n);
+    b &= ~((0x7n) << 52n);
+    b |= (0x3n << 52n);
+    b &= ~((0xFn) << 55n);
+    b |= (BigInt(VM.eExp[half] & 0xF) << 55n);
+    b &= ~((1n << 22n) - 1n);
+    b |= BigInt(VM.eFrac[half] & 0x3FFFFF);
+    return bitsf64(b);
+  }
+
+  function scratchMask(read, dstEqSrc, mod) {
+    const mem = mod & 3;
+    const cond = mod >> 4;
+    if (read && dstEqSrc) return MASK_L3;
+    if (!read && cond >= 14) return MASK_L3;
+    return mem === 0 ? MASK_L2 : MASK_L1;
+  }
+  function lvlOf(mask) { return mask === MASK_L1 ? 1 : mask === MASK_L2 ? 2 : 3; }
+
+  function memAddr(reg, imm, mask) {
+    return u32(reg + imm) & mask;
+  }
+
+  function xorRFrom(view, addr) {
+    for (let i = 0; i < 8; i++) {
+      VM.r[i] = u64(VM.r[i] ^ view.getBigUint64(addr + i * 8, true));
+    }
+  }
+  function storeR(addr) {
+    addr = addr & MASK_L3_64;
+    for (let i = 0; i < 8; i++) sp.setBigUint64(addr + i * 8, VM.r[i], true);
+  }
+  function storeF(addr) {
+    addr = addr & MASK_L3_64;
+    for (let i = 0; i < 8; i++) sp.setFloat64(addr + i * 8, VM.f[i], true);
+  }
+
+  function loadFE(addr) {
+    addr = addr & MASK_L3_64;
+    for (let i = 0; i < 4; i++) {
+      const o = addr + i * 8;
+      VM.f[i * 2] = sp.getInt32(o, true);
+      VM.f[i * 2 + 1] = sp.getInt32(o + 4, true);
+    }
+    for (let i = 0; i < 4; i++) {
+      const o = addr + 32 + i * 8;
+      VM.e[i * 2] = cvtE(sp.getInt32(o, true), 0);
+      VM.e[i * 2 + 1] = cvtE(sp.getInt32(o + 4, true), 1);
+    }
+  }
+
+  function mark(last, i, pc) { last[i] = pc; }
+
+  function execIns(ins, pc, last) {
+    const name = OPNAME[ins.opcode] || "IADD_RS";
+    S.counts[name] = (S.counts[name] || 0) + 1;
+    S.mixTotal++;
+    const dstR = ins.dst & 7, srcR = ins.src & 7;
+    const dstF = ins.dst & 3, srcA = ins.src & 3;
+    const dstFE = ins.dst & 7;
+    const mod = ins.mod, imm = ins.imm32 >>> 0, immS = se32(ins.imm32);
+    const sh = (mod >> 2) & 3;
+    const same = dstR === srcR;
+
+    function loadMemInt() {
+      const mask = scratchMask(true, same, mod);
+      const addr = memAddr(same ? 0 : lo32(VM.r[srcR]), imm, mask);
+      S.spAddr = addr; S.spLvl = lvlOf(mask);
+      spark(addr);
+      return sp.getBigUint64(addr, true);
+    }
+    function loadMemF(groupE) {
+      const mask = scratchMask(true, same, mod);
+      const addr = memAddr(same ? 0 : lo32(VM.r[srcR]), imm, mask);
+      S.spAddr = addr; S.spLvl = lvlOf(mask);
+      spark(addr);
+      const a = sp.getInt32(addr, true), b = sp.getInt32(addr + 4, true);
+      if (!groupE) return [a, b];
+      return [cvtE(a, 0), cvtE(b, 1)];
+    }
+
+    switch (name) {
+      case "IADD_RS": {
+        let add = u64(VM.r[srcR] << BigInt(sh));
+        if (dstR === 5) add = u64(add + immS);
+        VM.r[dstR] = u64(VM.r[dstR] + add);
+        mark(last, dstR, pc); break;
+      }
+      case "IADD_M":
+        VM.r[dstR] = u64(VM.r[dstR] + loadMemInt());
+        mark(last, dstR, pc); break;
+      case "ISUB_R":
+        VM.r[dstR] = u64(VM.r[dstR] - (same ? immS : VM.r[srcR]));
+        mark(last, dstR, pc); break;
+      case "ISUB_M":
+        VM.r[dstR] = u64(VM.r[dstR] - loadMemInt());
+        mark(last, dstR, pc); break;
+      case "IMUL_R":
+        VM.r[dstR] = u64(VM.r[dstR] * (same ? immS : VM.r[srcR]));
+        mark(last, dstR, pc); break;
+      case "IMUL_M":
+        VM.r[dstR] = u64(VM.r[dstR] * loadMemInt());
+        mark(last, dstR, pc); break;
+      case "IMULH_R":
+        VM.r[dstR] = mulh(VM.r[dstR], same ? VM.r[dstR] : VM.r[srcR], false);
+        mark(last, dstR, pc); break;
+      case "IMULH_M":
+        VM.r[dstR] = mulh(VM.r[dstR], loadMemInt(), false);
+        mark(last, dstR, pc); break;
+      case "ISMULH_R":
+        VM.r[dstR] = mulh(VM.r[dstR], same ? VM.r[dstR] : VM.r[srcR], true);
+        mark(last, dstR, pc); break;
+      case "ISMULH_M":
+        VM.r[dstR] = mulh(VM.r[dstR], loadMemInt(), true);
+        mark(last, dstR, pc); break;
+      case "IMUL_RCP": {
+        const rcp = reciprocal(imm);
+        if (rcp !== 0n) { VM.r[dstR] = u64(VM.r[dstR] * rcp); mark(last, dstR, pc); }
+        break;
+      }
+      case "INEG_R":
+        VM.r[dstR] = u64(-VM.r[dstR]);
+        mark(last, dstR, pc); break;
+      case "IXOR_R":
+        VM.r[dstR] = u64(VM.r[dstR] ^ (same ? immS : VM.r[srcR]));
+        mark(last, dstR, pc); break;
+      case "IXOR_M":
+        VM.r[dstR] = u64(VM.r[dstR] ^ loadMemInt());
+        mark(last, dstR, pc); break;
+      case "IROR_R":
+        VM.r[dstR] = rotR(VM.r[dstR], same ? (imm & 63) : lo32(VM.r[srcR]));
+        mark(last, dstR, pc); break;
+      case "IROL_R":
+        VM.r[dstR] = rotL(VM.r[dstR], same ? (imm & 63) : lo32(VM.r[srcR]));
+        mark(last, dstR, pc); break;
+      case "ISWAP_R":
+        if (!same) {
+          const t = VM.r[dstR]; VM.r[dstR] = VM.r[srcR]; VM.r[srcR] = t;
+          mark(last, dstR, pc); mark(last, srcR, pc);
+        }
+        break;
+      case "FSWAP_R": {
+        const arr = dstFE < 4 ? VM.f : VM.e;
+        const o = (dstFE % 4) * 2;
+        const t = arr[o]; arr[o] = arr[o + 1]; arr[o + 1] = t;
+        break;
+      }
+      case "FADD_R":
+        VM.f[dstF * 2] += VM.a[srcA * 2];
+        VM.f[dstF * 2 + 1] += VM.a[srcA * 2 + 1];
+        break;
+      case "FADD_M": {
+        const v = loadMemF(false);
+        VM.f[dstF * 2] += v[0]; VM.f[dstF * 2 + 1] += v[1];
+        break;
+      }
+      case "FSUB_R":
+        VM.f[dstF * 2] -= VM.a[srcA * 2];
+        VM.f[dstF * 2 + 1] -= VM.a[srcA * 2 + 1];
+        break;
+      case "FSUB_M": {
+        const v = loadMemF(false);
+        VM.f[dstF * 2] -= v[0]; VM.f[dstF * 2 + 1] -= v[1];
+        break;
+      }
+      case "FSCAL_R":
+        VM.f[dstF * 2] = bitsf64(f64bits(VM.f[dstF * 2]) ^ 0x80F0000000000000n);
+        VM.f[dstF * 2 + 1] = bitsf64(f64bits(VM.f[dstF * 2 + 1]) ^ 0x80F0000000000000n);
+        break;
+      case "FMUL_R":
+        VM.e[dstF * 2] *= VM.a[srcA * 2];
+        VM.e[dstF * 2 + 1] *= VM.a[srcA * 2 + 1];
+        break;
+      case "FDIV_M": {
+        const v = loadMemF(true);
+        VM.e[dstF * 2] /= v[0] || 1;
+        VM.e[dstF * 2 + 1] /= v[1] || 1;
+        break;
+      }
+      case "FSQRT_R":
+        VM.e[dstF * 2] = Math.sqrt(Math.abs(VM.e[dstF * 2]));
+        VM.e[dstF * 2 + 1] = Math.sqrt(Math.abs(VM.e[dstF * 2 + 1]));
+        break;
+      case "CFROUND": {
+        const rot = rotR(VM.r[srcR], imm);
+        VM.fprc = Number(rot & 3n);
+        break;
+      }
+      case "CBRANCH": {
+        const b = (mod >> 4) + JUMP_OFFSET;
+        let cimm = immS | (1n << BigInt(b));
+        if (b > 0) cimm &= ~(1n << BigInt(b - 1));
+        cimm = u64(cimm);
+        const target = last[dstR] < 0 ? 0 : last[dstR] + 1;
+        VM.r[dstR] = u64(VM.r[dstR] + cimm);
+        const mask = ((1n << BigInt(JUMP_BITS)) - 1n) << BigInt(b);
+        const taken = (VM.r[dstR] & mask) === 0n;
+        for (let i = 0; i < 8; i++) mark(last, i, pc);
+        S.lastIns = "CBRANCH r" + dstR + (taken ? "  → " + target : "  fall");
+        return taken ? target : null;
+      }
+      case "ISTORE": {
+        const mask = scratchMask(false, false, mod);
+        const addr = memAddr(lo32(VM.r[dstR]), imm, mask);
+        sp.setBigUint64(addr, VM.r[srcR], true);
+        S.spAddr = addr; S.spLvl = lvlOf(mask);
+        spark(addr);
+        break;
+      }
+    }
+    S.lastIns = fmtIns(name, ins);
+    return null;
+  }
+
+  function fmtIns(name, ins) {
+    const d = ins.dst & 7, s = ins.src & 7;
+    if (name.startsWith("F") || name === "CFROUND") {
+      return name + "  dst=" + (ins.dst & 7) + " src=" + (ins.src & 7);
+    }
+    if (name === "ISTORE") return "ISTORE  [r" + d + "+imm] ← r" + s;
+    return name + "  r" + d + ", r" + s;
+  }
+
+  function decode(pc) {
+    const o = pc * 8;
+    return {
+      opcode: prog[o], dst: prog[o + 1], src: prog[o + 2], mod: prog[o + 3],
+      imm32: progDv.getUint32(o + 4, true)
+    };
+  }
+
+  function executeProgram() {
+    const last = [-1, -1, -1, -1, -1, -1, -1, -1];
+    let pc = 0, n = 0;
+    let shown = "";
+    while (pc < PROG_SIZE && n++ < 1024) {
+      const ins = decode(pc);
+      S.pc = pc;
+      const jmp = execIns(ins, pc, last);
+      shown = S.lastIns;
+      pc = jmp == null ? pc + 1 : jmp;
+    }
+    S.lastIns = shown + "   (" + S.mixTotal + " ops this program)";
+  }
+
+  function spark(addr) {
+    S.sparks.push({ a: (addr >>> 6) % N_SP_VIS, t: S.t, lvl: S.spLvl });
+    if (S.sparks.length > 28) S.sparks.shift();
+  }
+  function probe(item) {
+    S.probes.push({ a: item, t: S.t, p: S.program });
+    if (S.probes.length > 40) S.probes.shift();
+  }
+
+  function beatLoad() {
+    const s0 = VM.readReg[0], s1 = VM.readReg[1];
+    const x = VM.r[s0] ^ VM.r[s1];
+    VM.spAddr0 = u32(VM.spAddr0 ^ lo32(x));
+    VM.spAddr1 = u32(VM.spAddr1 ^ hi32(x));
+    const a0 = VM.spAddr0 & MASK_L3_64;
+    const a1 = VM.spAddr1 & MASK_L3_64;
+    xorRFrom(sp, a0);
+    loadFE(a1);
+    S.spAddr = a0; S.spLvl = 3;
+    spark(a0); spark(a1);
+    S.op = "§1–3  spAddr mix · r ⊕= P[L3] · f,e ← P[L3]";
+    S.lastIns = "readReg " + VM.readReg.join(",") + "  spAddr0=" + hex32(a0);
+  }
+
+  function beatOps() {
+    executeProgram();
+    S.op = "§4  256 instructions  last: " + S.lastIns;
+  }
+
+  function beatDataset() {
+    VM.mt = VM.ma;
+    const s2 = VM.readReg[2], s3 = VM.readReg[3];
+    VM.mx = u32(VM.mx ^ lo32(VM.r[s2] ^ VM.r[s3]));
+    const addr = u32(VM.datasetOffset + (VM.mt % DS_BASE));
+    const item = (addr >>> 6) % N_DS;
+    xorRFrom(ds, item * 64);
+    const tmp = VM.mx; VM.mx = VM.ma; VM.ma = tmp;
+    S.dsItem = item;
+    probe(item);
+    S.op = "§5–8  r0…r7 ⊕= D[" + item + "]  64 B  ·  swap(mx,ma)";
+    S.lastIns = "mt=" + hex32(VM.mt) + "  item " + item + "/96";
+  }
+
+  function beatStore() {
+    storeR(VM.spAddr1);
+    for (let i = 0; i < 4; i++) {
+      VM.f[i * 2] = xorF64(VM.f[i * 2], VM.e[i * 2]);
+      VM.f[i * 2 + 1] = xorF64(VM.f[i * 2 + 1], VM.e[i * 2 + 1]);
+    }
+    storeF(VM.spAddr0);
+    spark(VM.spAddr1 & MASK_L3_64);
+    spark(VM.spAddr0 & MASK_L3_64);
+    VM.spAddr0 = 0; VM.spAddr1 = 0;
+    VM.ic--;
+    S.op = "§9–13  P ← r, f⊕e  ic=" + VM.ic;
+  }
+
+  function oneIter() {
+    beatLoad(); beatOps(); beatDataset(); beatStore();
+  }
+
+  function foldHash() {
+    let h = 0x9e3779b97f4a7c15n ^ BigInt(S.nonce);
+    for (let i = 0; i < 8; i++) h = u64((h ^ VM.r[i]) * 0xbf58476d1ce4e5b9n);
+    for (let i = 0; i < 8; i++) h = u64((h ^ f64bits(VM.f[i])) * 0x94d049bb133111ebn);
+    for (let i = 0; i < 32; i++) {
+      h = u64((h ^ sp.getBigUint64((i * 65536) % SP_SIZE, true)) * 0x9e3779b97f4a7c15n);
+    }
+    S.hash = h;
+    S.found = S.forceWin || (Number(h % BigInt(S.demoD)) === 0);
+    S.forceWin = false;
+    S.tries++;
+    if (S.found) S.finds++;
+    S.darts.push({ ang: Number(h % 100000n) / 100000 * Math.PI * 2, hit: S.found, t: S.t });
+    if (S.darts.length > 160) S.darts.shift();
+  }
+
+  function afterProgram() {
+    S.program++;
+    if (S.program >= PROG_COUNT) {
+      S.program = 7;
+      S.phase = "fold";
+      S.op = "AesHash1R(scratchpad) stub · Hash256(RegisterFile) stub";
+    } else {
+      S.phase = "prog";
+      S.op = "next program from RegisterFile mix  (spec steps 9–10, stub PRNG)";
+    }
+  }
+
+  function bumpNonce() {
+    S.nonce = u32(S.nonce + 1 + Number(nextU64() & 0xFFn));
+    S.program = 0;
+    S.found = false;
+    S.beat = 0;
+    S.phase = "scratch";
+    if ((S.tries % 64) === 0) {
+      S.epoch = (S.epoch + 1) % 2048;
+      if (S.epoch === 0) { S.key++; seedDataset(); }
+    }
+  }
+
+  seedDataset();
+
+  function tickSubstep() {
+    if (S.phase === "scratch") {
+      fillScratchpad();
+      S.op = "fill Scratchpad L3  2,097,152 B  (AesGenerator1R stub)";
+      S.phase = "prog";
+      return;
+    }
+    if (S.phase === "prog") {
+      emitProgram();
+      S.op = "program VM  128 config + 256×8 B  (AesGenerator4R stub)  ic=2048";
+      S.phase = "exec";
+      S.beat = 0;
+      return;
+    }
+    if (S.phase === "exec") {
+      if (S.beat === 0) beatLoad();
+      else if (S.beat === 1) beatOps();
+      else if (S.beat === 2) beatDataset();
+      else beatStore();
+      S.beat++;
+      if (S.beat > 3) {
+        S.beat = 0;
+        if (VM.ic <= 0) afterProgram();
+      }
+      return;
+    }
+    if (S.phase === "fold") {
+      foldHash();
+      S.phase = "check";
+      S.op = S.found ? "R < T  find" : "R ≥ T  miss · nonce++";
+      return;
+    }
+    if (S.phase === "check") {
+      S.hold++;
+      if (S.hold > (S.found ? 40 : 8)) {
+        S.hold = 0;
+        bumpNonce();
+      }
+    }
+  }
+
+  function tickFast(nIters) {
+    if (S.phase === "scratch") { fillScratchpad(); S.phase = "prog"; return; }
+    if (S.phase === "prog") { emitProgram(); S.phase = "exec"; S.beat = 3; return; }
+    if (S.phase === "exec") {
+      let k = 0;
+      while (k < nIters && VM.ic > 0) { oneIter(); k++; }
+      S.beat = 3;
+      if (VM.ic <= 0) afterProgram();
+      return;
+    }
+    if (S.phase === "fold") { foldHash(); S.phase = "check"; return; }
+    if (S.phase === "check") {
+      S.hold += 4;
+      if (S.hold > (S.found ? 40 : 6)) { S.hold = 0; bumpNonce(); }
+    }
+  }
+
+  function tickMachine() {
+    if (S.speed <= 0.4) tickSubstep();
+    else {
+      const n = S.speed >= 10 ? 128 : S.speed >= 3 ? 48 : 16;
+      tickFast(n);
+    }
+  }
+
+  const $ = (id) => document.getElementById(id);
+  const made = $("made"), clock = $("clock"), lot = $("lot"), mix = $("mix");
+
+  document.getElementById("tabs").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("on", x === b));
+    $("p-made").classList.toggle("on", b.dataset.t === "made");
+    $("p-helper").classList.toggle("on", b.dataset.t === "helper");
+    sizeAll();
+  });
+  document.getElementById("speeds").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    document.querySelectorAll("#speeds button").forEach(x => x.classList.toggle("on", x === b));
+    S.speed = parseFloat(b.dataset.sp);
+  });
+  $("play").addEventListener("click", () => {
+    S.playing = !S.playing;
+    $("play").classList.toggle("on", S.playing);
+    $("play").textContent = S.playing ? "▶ run" : "❚❚ pause";
+    $("livedot").classList.toggle("off", !S.playing);
+  });
+  $("step").addEventListener("click", () => {
+    S.playing = false;
+    $("play").classList.remove("on");
+    $("play").textContent = "❚❚ pause";
+    tickSubstep();
+  });
+  $("win").addEventListener("click", () => {
+    S.forceWin = true;
+    VM.ic = 0;
+    S.program = 7;
+    S.phase = "fold";
+    tickSubstep();
+  });
+  $("diff").addEventListener("input", () => {
+    S.demoD = parseInt($("diff").value, 10);
+    $("diffV").textContent = S.demoD;
+  });
+
+  function sizeCanvas(c, cssH) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(1, c.clientWidth || (c.parentElement && c.parentElement.clientWidth) || 600);
+    const h = Math.max(1, cssH || c.clientHeight || 520);
+    if (c.id !== "made") c.style.height = h + "px";
+    const bw = Math.max(1, Math.floor(w * dpr)), bh = Math.max(1, Math.floor(h * dpr));
+    if (c.width !== bw || c.height !== bh) { c.width = bw; c.height = bh; }
+    const ctx = c.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, w, h };
+  }
+  function sizeAll() {
+    if ($("p-made").classList.contains("on")) sizeCanvas(made, made.parentElement.clientHeight);
+  }
+  window.addEventListener("resize", sizeAll);
+
+  function ringPt(cx, cy, r, i, n) {
+    const a = -Math.PI / 2 + (i / n) * Math.PI * 2;
+    return [cx + Math.cos(a) * r, cy + Math.sin(a) * r, a];
+  }
+
+  function drawMade() {
+    const host = made.parentElement;
+    const { ctx, w, h } = sizeCanvas(made, host.clientHeight);
+    ctx.clearRect(0, 0, w, h);
+    const cx = w * 0.54, cy = h * 0.50;
+    const m = Math.min(w, h);
+    const rD = m * 0.42, rS = m * 0.28, rV = m * 0.12;
+
+    ctx.strokeStyle = "rgba(240,238,230,0.04)"; ctx.lineWidth = 1;
+    for (let x = 40; x < w; x += 40) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+
+    function ring(r, col, a) {
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.strokeStyle = col; ctx.globalAlpha = a; ctx.lineWidth = 1.2; ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    ring(rD, "#d9a441", 0.4);
+    ring(rS + 10, "#26c6c0", 0.25);
+    ring(rS, "#26c6c0", 0.45);
+    ring(rS - 12, "#3987e5", 0.35);
+    ring(rV, "#9085e9", 0.5);
+
+    for (let i = 0; i < N_DS; i++) {
+      const [x1, y1] = ringPt(cx, cy, rD - 9, i, N_DS);
+      const [x2, y2] = ringPt(cx, cy, rD + 9, i, N_DS);
+      const hot = S.probes.some(p => p.a === i && S.t - p.t < 20);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+      ctx.strokeStyle = hot ? "#d9a441" : "rgba(217,164,65,0.28)";
+      ctx.lineWidth = hot ? 2.6 : 1; ctx.stroke();
+    }
+    for (let i = 0; i < N_SP_VIS; i++) {
+      const [x, y] = ringPt(cx, cy, rS, i, N_SP_VIS);
+      const hit = S.sparks.find(p => p.a === i && S.t - p.t < 14);
+      ctx.beginPath(); ctx.arc(x, y, hit ? 3.6 : 2, 0, Math.PI * 2);
+      ctx.fillStyle = hit ? (hit.lvl === 1 ? "#9085e9" : hit.lvl === 2 ? "#3987e5" : "#26c6c0") : "rgba(38,198,192,0.3)";
+      ctx.fill();
+    }
+    for (let i = 0; i < 8; i++) {
+      const [x, y] = ringPt(cx, cy, (rS + rV) * 0.52, i, 8);
+      const on = i === S.program && S.phase === "exec";
+      const done = i < S.program || S.phase === "fold" || S.phase === "check";
+      ctx.beginPath(); ctx.arc(x, y, on ? 7 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = on ? "#d9a441" : done ? "rgba(47,191,133,0.85)" : "rgba(240,238,230,0.18)";
+      ctx.fill();
+      ctx.fillStyle = on ? "#0d0e11" : "#c4c2b9";
+      ctx.font = "9px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(i), x, y);
+    }
+    S.probes.forEach((p, k) => {
+      const age = S.t - p.t; if (age > 40) return;
+      const [x, y] = ringPt(cx, cy, rD, p.a, N_DS);
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y);
+      ctx.strokeStyle = "rgba(217,164,65," + (0.12 + (1 - age / 40) * 0.5) + ")";
+      ctx.lineWidth = k === S.probes.length - 1 ? 1.8 : 1; ctx.stroke();
+      if (k === S.probes.length - 1) {
+        ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fillStyle = "#d9a441"; ctx.fill();
+      }
+    });
+    for (let i = 0; i < 8; i++) {
+      const mag = Number(VM.r[i] >> 48n) / 65536;
+      const a0 = -Math.PI / 2 + i * Math.PI / 4 + 0.06;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rV * (0.4 + mag * 0.55), a0, a0 + Math.PI / 4 - 0.12);
+      ctx.strokeStyle = S.found && S.phase === "check" ? "#d9a441" : "#9085e9";
+      ctx.lineWidth = 5; ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(cx, cy, 17, 0, Math.PI * 2);
+    ctx.fillStyle = S.found && S.phase === "check" ? "#d9a441" : "#16171f"; ctx.fill();
+    ctx.strokeStyle = "rgba(240,238,230,0.25)"; ctx.stroke();
+    ctx.fillStyle = S.found && S.phase === "check" ? "#0d0e11" : "#f0eee6";
+    ctx.font = "600 9px ui-monospace, Menlo, monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("VM", cx, cy);
+  }
+
+  function drawClock() {
+    const { ctx, w, h } = sizeCanvas(clock, clock.clientWidth);
+    ctx.clearRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2, r = Math.min(w, h) * 0.38;
+    ctx.strokeStyle = "rgba(240,238,230,0.12)";
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.62, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, r * 0.28, 0, Math.PI * 2); ctx.stroke();
+    for (let i = 0; i < 8; i++) {
+      const [x, y, a] = ringPt(cx, cy, r, i, 8);
+      const on = i === S.program;
+      ctx.beginPath(); ctx.arc(x, y, on ? 11 : 7, 0, Math.PI * 2);
+      ctx.fillStyle = on ? "#d9a441" : i < S.program ? "#2fbf85" : "rgba(240,238,230,0.2)";
+      ctx.fill();
+      const [lx, ly] = ringPt(cx, cy, r + 22, i, 8);
+      ctx.fillStyle = "#c4c2b9"; ctx.font = "11px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("P" + i, lx, ly);
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * r * 0.55, cy + Math.sin(a) * r * 0.55);
+      ctx.strokeStyle = on ? "rgba(217,164,65,0.55)" : "rgba(240,238,230,0.08)"; ctx.stroke();
+    }
+    const frac = 1 - VM.ic / PROG_ITERS;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.62, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+    ctx.strokeStyle = "#26c6c0"; ctx.lineWidth = 4; ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 0.28, -Math.PI / 2, -Math.PI / 2 + (S.epoch / 2048) * Math.PI * 2);
+    ctx.strokeStyle = "#9085e9"; ctx.lineWidth = 6; ctx.stroke();
+    ctx.fillStyle = "#f0eee6"; ctx.font = "600 13px ui-monospace, Menlo, monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("prog " + S.program + "/8", cx, cy - 8);
+    ctx.font = "11px ui-monospace, Menlo, monospace"; ctx.fillStyle = "#84837c";
+    ctx.fillText("ic " + VM.ic, cx, cy + 10);
+  }
+
+  function drawLot() {
+    const { ctx, w, h } = sizeCanvas(lot, lot.clientWidth);
+    ctx.clearRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2, R = Math.min(w, h) * 0.38;
+    const rT = R / Math.sqrt(S.demoD);
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.fillStyle = "#16171f"; ctx.fill(); ctx.strokeStyle = "rgba(240,238,230,0.2)"; ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, rT, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(217,164,65,0.22)"; ctx.fill(); ctx.strokeStyle = "#d9a441"; ctx.stroke();
+    S.darts.forEach(d => {
+      const rr = Math.sqrt((d.ang * 13.17) % 1) * R;
+      ctx.beginPath(); ctx.arc(cx + Math.cos(d.ang) * rr, cy + Math.sin(d.ang) * rr, d.hit ? 4 : 2, 0, Math.PI * 2);
+      ctx.fillStyle = d.hit ? "#2fbf85" : "rgba(240,238,230,0.45)"; ctx.fill();
+    });
+    ctx.fillStyle = "#84837c"; ctx.font = "11px ui-monospace, Menlo, monospace"; ctx.textAlign = "center";
+    ctx.fillText("target  area = 1/" + S.demoD, cx, cy + R + 22);
+  }
+
+  function drawMix() {
+    const { ctx, w, h } = sizeCanvas(mix, 220);
+    ctx.clearRect(0, 0, w, h);
+    const names = FREQ.map(x => x[0]);
+    const barH = Math.max(4, (h - 24) / names.length);
+    const maxE = 32;
+    names.forEach((name, i) => {
+      const exp = EXPECT[name];
+      const got = S.mixTotal ? (S.counts[name] || 0) / (S.mixTotal / 256) : 0;
+      const y = 8 + i * barH;
+      ctx.fillStyle = "rgba(240,238,230,0.08)";
+      ctx.fillRect(110, y, (exp / maxE) * (w - 130), barH - 1);
+      ctx.fillStyle = "#d9a441";
+      ctx.fillRect(110, y, Math.min(1, got / maxE) * (w - 130), Math.max(1, barH - 3));
+      ctx.fillStyle = "#84837c"; ctx.font = "9px ui-monospace, Menlo, monospace";
+      ctx.textAlign = "right"; ctx.fillText(name, 104, y + barH - 2);
+    });
+  }
+
+  function updateReadouts() {
+    const phaseMap = { scratch: "fill scratchpad", prog: "program VM", exec: "execute 4.6.2", fold: "fold R (stub)", check: S.found ? "FIND" : "miss" };
+    $("m-phase").textContent = ({ scratch: "fill", prog: "program", exec: "execute", fold: "fold", check: S.found ? "FIND" : "miss" })[S.phase];
+    $("m-phase").className = "v " + (S.found && S.phase === "check" ? "green" : "teal");
+    $("m-epoch").textContent = S.epoch + " / 2048";
+    $("m-nonce").textContent = "0x" + hex32(S.nonce);
+    $("m-prog").textContent = S.program + " / 8";
+    $("m-iter").textContent = VM.ic + " / 2048";
+    $("m-addr").textContent = S.dsItem + " / 96";
+    $("m-ma").textContent = hex32(VM.ma);
+    $("m-mx").textContent = hex32(VM.mx);
+    $("m-hash").textContent = (S.phase === "check" || S.phase === "fold") ? hex64(S.hash).slice(0, 12) + "…" : "—";
+    $("m-cmp").textContent = S.phase === "check" ? (S.found ? "yes" : "no") : "—";
+    $("m-cmp").className = "v " + (S.phase === "check" ? (S.found ? "green" : "pink") : "");
+    $("m-tries").textContent = S.tries.toLocaleString();
+    $("m-finds").textContent = S.finds.toLocaleString();
+    $("m-op").textContent = S.lastIns || S.op;
+    $("penlive").textContent = S.phase === "exec" && S.beat === 2
+      ? "step 7 · XOR item " + S.dsItem + " → r0…r7"
+      : phaseMap[S.phase];
+    const tgt = $("lottgt"), tick = $("lottick");
+    if (tgt) tgt.style.width = Math.max(3, (100 / S.demoD)) + "%";
+    if (tick) tick.style.left = (Number(S.hash & 0xFFFFFFFFn) / 4294967296 * 100) + "%";
+    if (tick) tick.style.background = S.found && S.phase === "check" ? "#2fbf85" : "";
+    $("liveword").textContent = S.playing ? (S.found && S.phase === "check" ? "find" : "4.6.2") : "paused";
+    $("clockNote").textContent = "ic is the spec counter (2048 → 0). Eight programs chained so an easy program cannot be skipped. Violet core is epoch " + S.epoch + "/2048.";
+    $("iterNote").textContent = S.lastIns + "  ·  r0=" + hex64(VM.r[0]);
+    $("mixNote").textContent = S.mixTotal
+      ? (S.mixTotal + " ops this program. Gold = observed per 256. Grey = spec frequency.")
+      : "Counts vs Table 5.x expected frequency × 256.";
+    $("diffV").textContent = S.demoD;
+
+    const rf = $("regfile");
+    let html = "";
+    for (let i = 0; i < 8; i++) {
+      html += '<span class="rn">r' + i + '</span><span class="rv' + (S.phase === "exec" && S.beat === 2 ? " hot" : "") + '">' + hex64(VM.r[i]) + "</span>";
+    }
+    rf.innerHTML = html;
+    const ff = $("fpfile");
+    let fh = "";
+    for (let i = 0; i < 4; i++) {
+      fh += '<span class="rn">f' + i + '</span><span class="rv">' + VM.f[i * 2].toExponential(1) + "</span>";
+    }
+    for (let i = 0; i < 4; i++) {
+      fh += '<span class="rn">e' + i + '</span><span class="rv">' + VM.e[i * 2].toExponential(1) + "</span>";
+    }
+    ff.innerHTML = fh;
+    document.querySelectorAll("#beats li").forEach(li => {
+      const b = parseInt(li.dataset.b, 10);
+      li.classList.toggle("on", S.phase === "exec" && S.beat === b);
+      li.classList.toggle("done", S.phase === "exec" && S.beat > b);
+    });
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(40, now - last); last = now;
+    S.t += dt / 16.67;
+    if (S.playing) tickMachine();
+    if ($("p-made").classList.contains("on")) drawMade();
+    else { drawClock(); drawLot(); drawMix(); }
+    updateReadouts();
+    requestAnimationFrame(frame);
+  }
+  sizeAll();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

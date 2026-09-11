@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XMR Miner Setup</title>
+<style>
+  /* System fonts only — this file must render before the new Mac has a
+     network connection or any fonts fetched. */
+  :root{
+    --paper:#FCFAF7; --card:#F4EFE8; --sunk:#EBE4D9;
+    --ink:#1A1611; --muted:#6E6459; --rule:#DED5C7;
+    --accent:#C24A08; --warn-bg:#FBF0DC; --warn-line:#B2791C;
+    --stop-bg:#FBE6E0; --stop-line:#A8341C; --ok:#2E6F4E;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#15120E; --card:#1E1A16; --sunk:#262119;
+      --ink:#EFE9E0; --muted:#A39889; --rule:#332C24;
+      --accent:#FF8340; --warn-bg:#2E2312; --warn-line:#D99A3D;
+      --stop-bg:#33190F; --stop-line:#E5765F; --ok:#63B98C;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+  }
+  .wrap{max-width:820px;margin:0 auto;padding-inline:22px;padding-block:44px 80px}
+  h1{font-size:clamp(1.9rem,5vw,2.5rem);line-height:1.1;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:1.22rem;margin:0;letter-spacing:-.01em}
+  h3{font-size:1rem;margin:0}
+  p{margin:0}
+  .sub{color:var(--muted);font-size:1.02rem;margin-top:4px}
+  code,.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.87em}
+  code{background:var(--sunk);padding:.12em .4em;border-radius:4px}
+  pre{
+    background:var(--sunk);border-radius:6px;padding:13px 15px;margin:0;
+    overflow-x:auto;font-family:ui-monospace,"SF Mono",Menlo,monospace;
+    font-size:.85rem;line-height:1.6;
+  }
+  header{border-bottom:2px solid var(--ink);padding-bottom:18px;margin-bottom:32px}
+
+  section{margin-top:36px;display:flex;flex-direction:column;gap:14px}
+  .sec-title{display:flex;align-items:baseline;gap:11px;border-bottom:1px solid var(--rule);padding-bottom:9px}
+  .sec-num{
+    font-family:ui-monospace,Menlo,monospace;font-size:.74rem;font-weight:700;
+    color:var(--accent);letter-spacing:.08em;
+  }
+
+  ol.steps{margin:0;padding:0;list-style:none;counter-reset:s;display:flex;flex-direction:column;gap:17px}
+  ol.steps > li{
+    counter-increment:s;display:grid;grid-template-columns:30px 1fr;gap:4px 13px;align-items:start;
+  }
+  ol.steps > li::before{
+    content:counter(s);grid-row:1/span 9;
+    font-family:ui-monospace,Menlo,monospace;font-size:.82rem;font-weight:700;
+    color:var(--paper);background:var(--ink);
+    width:24px;height:24px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;margin-top:1px;
+  }
+  ol.steps > li > *{grid-column:2}
+  ol.steps h3{margin-bottom:3px}
+
+  .note{
+    background:var(--card);border-radius:6px;padding:14px 16px;
+    display:flex;flex-direction:column;gap:7px;font-size:.94rem;
+  }
+  .warn{background:var(--warn-bg);border-left:3px solid var(--warn-line)}
+  .stop{background:var(--stop-bg);border-left:3px solid var(--stop-line)}
+  .label{
+    font-family:ui-monospace,Menlo,monospace;font-size:.68rem;font-weight:700;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  }
+  .warn .label{color:var(--warn-line)} .stop .label{color:var(--stop-line)}
+
+  .wallet{
+    background:var(--card);border:1px solid var(--rule);border-radius:6px;padding:15px 17px;
+    display:flex;flex-direction:column;gap:8px;
+  }
+  .addr{
+    font-family:ui-monospace,Menlo,monospace;font-size:.78rem;line-height:1.5;
+    word-break:break-all;color:var(--ink);background:var(--sunk);
+    padding:9px 11px;border-radius:5px;
+  }
+  .tick{color:var(--ok);font-weight:600}
+
+  table{border-collapse:collapse;width:100%;font-size:.92rem}
+  .scroll{overflow-x:auto}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--rule);vertical-align:top}
+  th{font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-family:ui-monospace,Menlo,monospace}
+  tr:last-child td{border-bottom:0}
+
+  @media (max-width:560px){
+    ol.steps > li{grid-template-columns:1fr;gap:7px}
+    ol.steps > li::before{grid-row:auto}
+    ol.steps > li > *{grid-column:1}
+  }
+  @media print{
+    body{background:#fff;color:#000;font-size:10.5pt}
+    .wrap{padding:0;max-width:none}
+    section,li,.note,pre{break-inside:avoid;page-break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>XMR Miner Setup</h1>
+  <p class="sub">Moving the Monero miner from the M2 to your M4. Both machines
+     mine to the same wallet.</p>
+</header>
+
+<!-- WALLET -->
+<div class="wallet">
+  <span class="label">Payout wallet — same on both Macs</span>
+  <div class="addr">wallet.local — public receive address only (not in git)</div>
+  <p style="font-size:.92rem;color:var(--muted);margin:0">
+    <span class="tick">&#10003;</span> Copy <code>wallet.local.example</code> to
+    <code>wallet.local</code> and put the public Monero receive address there.
+    Spend and view keys never belong in this folder.</p>
+</div>
+
+<!-- 1 -->
+<section>
+  <div class="sec-title"><span class="sec-num">01</span><h2>Get the files across</h2></div>
+  <ol class="steps">
+    <li>
+      <h3>Copy the package to the M4</h3>
+      <p>AirDrop <code>XMR-Miner-Portable.zip</code> from this Mac's Desktop.
+         A USB drive or iCloud Drive works just as well.</p>
+    </li>
+    <li>
+      <h3>Unzip it</h3>
+      <p>Double-click the zip. You get a folder called
+         <code>XMR MINER</code> under <code>Desktop/PROJECTS</code>. That folder
+         is the install.</p>
+    </li>
+  </ol>
+</section>
+
+<!-- 2 -->
+<section>
+  <div class="sec-title"><span class="sec-num">02</span><h2>Install</h2></div>
+  <ol class="steps">
+    <li>
+      <h3>Open Terminal on the M4</h3>
+      <p>Applications &rarr; Utilities &rarr; Terminal.</p>
+    </li>
+    <li>
+      <h3>Run the installer</h3>
+      <p>Type <code>cd </code> (with a space), drag the
+         <code>XMR MINER</code> folder onto the Terminal window, press
+         Return. Then:</p>
+      <pre>./install.sh</pre>
+    </li>
+    <li>
+      <h3>Check what it reports, then confirm</h3>
+      <p>It prints the chip, core count, memory, and the worker name it picked,
+         then asks <code>Proceed? [y/N]</code>. Type <code>y</code> and Return.</p>
+      <p>It writes a launchd job with this Mac's paths and core count, and
+         builds <b>XMR Miner.app</b> in this folder. It starts nothing.</p>
+    </li>
+  </ol>
+
+  <div class="note warn">
+    <span class="label">If macOS refuses to run it</span>
+    <p>Files picked up a quarantine flag in transit. Clear it and retry:</p>
+    <pre>xattr -dr com.apple.quarantine "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"</pre>
+  </div>
+</section>
+
+<!-- 3 -->
+<section>
+  <div class="sec-title"><span class="sec-num">03</span><h2>Start mining</h2></div>
+  <ol class="steps">
+    <li>
+      <h3>Double-click <b>XMR Miner.app</b> in this folder</h3>
+      <p>Orange Monero icon. It asks whether to start. Click <b>Start Mining</b>.</p>
+    </li>
+    <li>
+      <h3>Wait about a minute, then click it again</h3>
+      <p>It needs that long to build its 2 GB dataset and reach full speed.
+         Clicking again shows speed, uptime, shares, and a Stop button.</p>
+    </li>
+  </ol>
+
+  <div class="note">
+    <span class="label">What good looks like</span>
+    <p><b>Shares accepted climbing, rejected staying at 0.</b> That is the pool
+       confirming your work. Speed on an M4 should beat the M2's ~3,200 H/s,
+       partly from the faster chip and partly because 16 GB+ means the dataset
+       is never squeezed.</p>
+  </div>
+</section>
+
+<!-- 4 -->
+<section>
+  <div class="sec-title"><span class="sec-num">04</span><h2>Confirm both Macs are paying you</h2></div>
+  <p>Open your MoneroOcean dashboard and paste the wallet address above. You
+     should see <b>two workers</b> reporting:</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Machine</th><th>Worker name</th><th>Wallet</th></tr></thead>
+      <tbody>
+        <tr><td>This M2</td><td class="mono">minerv3-m2-8gb</td><td>same</td></tr>
+        <tr><td>Your M4</td><td class="mono">minerv3-m4-&hellip;gb</td><td>same</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note">
+    <span class="label">Why the names differ</span>
+    <p>Deliberate. The wallet is what gets paid; the worker name only labels
+       which machine did the work, so you can see each one's speed separately.
+       Two machines with the <em>same</em> worker name would have their stats
+       merged and be impossible to tell apart. Payouts combine either way.</p>
+  </div>
+</section>
+
+<!-- 5 -->
+<section>
+  <div class="sec-title"><span class="sec-num">05</span><h2>Tune it (optional, ~10 minutes)</h2></div>
+  <p>The installer sets threads to the M4's core count. That was the right
+     answer on the M2 when measured — but it is a sensible default, not a
+     measurement, and the M4 has a different fast/efficiency core split. To get
+     the real number:</p>
+  <pre>"/Users/christiantavarez/Desktop/PROJECTS/XMR MINER/bin/xmr_bench_sweep.sh"</pre>
+  <p>Stop the miner first. It mines nothing while testing. For reference, the M2
+     climbed steadily and peaked exactly at its core count:</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Threads</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th><th>9</th><th>10</th></tr></thead>
+      <tbody><tr><td>H/s</td><td>2185</td><td>2558</td><td>2838</td><td>3093</td><td><b>3212</b></td><td>3163</td><td>3092</td></tr></tbody>
+    </table>
+  </div>
+  <p>If a different count wins on the M4, edit both <code>--threads</code> and
+     <code>--randomx-init</code> in:</p>
+  <pre>/Users/christiantavarez/Desktop/PROJECTS/XMR MINER/com.minerv3.xmrig.plist</pre>
+  <p>Then stop and start from the app.</p>
+</section>
+
+<!-- 6 -->
+<section>
+  <div class="sec-title"><span class="sec-num">06</span><h2>Everyday use</h2></div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>To do this</th><th>Do this</th></tr></thead>
+      <tbody>
+        <tr><td>Start, stop, or check speed</td><td>Double-click <b>XMR Miner.app</b> in <code>Desktop/PROJECTS/XMR MINER</code></td></tr>
+        <tr><td>Same, from Terminal</td><td><span class="mono">"/Users/christiantavarez/Desktop/PROJECTS/XMR MINER/bin/minerctl.sh" status</span> (or <span class="mono">start</span> / <span class="mono">stop</span>)</td></tr>
+        <tr><td>See full live stats</td><td><span class="mono">curl -s http://127.0.0.1:18088/2/summary | python3 -m json.tool</span></td></tr>
+        <tr><td>Read the logs</td><td><span class="mono">/Users/christiantavarez/Desktop/PROJECTS/XMR MINER/logs/</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note">
+    <span class="label">After a restart</span>
+    <p>Mining stays <b>off</b> until you click the app. That is intentional —
+       nothing launches at login. If it crashes while running, macOS restarts it
+       on its own within 30 seconds.</p>
+  </div>
+</section>
+
+<!-- 7 -->
+<section>
+  <div class="sec-title"><span class="sec-num">07</span><h2>Three rules worth keeping</h2></div>
+
+  <div class="note stop">
+    <span class="label">Never run two miners on one Mac</span>
+    <p>They fight over the same cores and each grabs its own 2 GB dataset.
+       Measured on the M2: <b>3,100 H/s collapsed to 240</b>. The app and the
+       installer both refuse if one is already running — don't work around it.
+       Two <em>separate Macs</em> is completely fine, which is the whole point
+       here.</p>
+  </div>
+
+  <div class="note stop">
+    <span class="label">Never move the miner into Downloads or Desktop</span>
+    <p>macOS protects those folders. The background job has no permission for
+       them and no way to ask, so it freezes on startup with <b>no error
+       message at all</b> — it looks alive but does nothing. This cost an hour
+       to diagnose on the M2. The installer puts everything in Application
+       Support for exactly this reason. Leave it there.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="label">Free memory is what sets your speed</span>
+    <p>The miner must keep a 2 GB dataset in RAM. If the Mac runs low, macOS
+       compresses part of it and speed collapses — this is almost always the
+       cause of a sudden drop, not a busy CPU. The M2 lost about 8% to this
+       constantly on 8 GB. An M4 with 16 GB+ should be fine, but if speed dips,
+       close apps before changing any settings.</p>
+  </div>
+</section>
+
+<!-- 8 -->
+<section>
+  <div class="sec-title"><span class="sec-num">08</span><h2>If something looks wrong</h2></div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Symptom</th><th>Likely cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>App says running, speed stays 0</td>
+          <td>Still building the dataset</td>
+          <td>Wait 60 seconds, click again</td>
+        </tr>
+        <tr>
+          <td>Rejected shares climbing</td>
+          <td>Clock drift or a flaky connection</td>
+          <td>Check the Mac's date &amp; time is set automatically</td>
+        </tr>
+        <tr>
+          <td>Started but nothing happens, no logs</td>
+          <td>Installed into a protected folder</td>
+          <td>Re-run <span class="mono">install.sh</span>; don't relocate it afterwards</td>
+        </tr>
+        <tr>
+          <td>&quot;Already running&quot; but nothing visible</td>
+          <td>A stray copy from a previous attempt</td>
+          <td><span class="mono">pkill -x xmrig</span> then start from the app</td>
+        </tr>
+        <tr>
+          <td>Speed much lower than expected</td>
+          <td>Memory pressure, or thread count</td>
+          <td>Close apps first; then run the sweep in step 05</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-title"><span class="sec-num">&mdash;</span><h2>One thing that is not in the package</h2></div>
+  <p>Your wallet <b>keys</b>. The package carries only the public receiving
+     address, which is all a miner needs. The keys never left the M2 and are not
+     required to mine — keep them where they are, and keep a backup somewhere
+     safe that is not a mining machine.</p>
+</section>
+
+</div>
+</body>
+</html>

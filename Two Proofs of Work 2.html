@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two Proofs of Work</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+  :root{
+    --paper:#FBF8F4;
+    --surface:#F4EFE8;
+    --sunk:#EDE6DC;
+    --ink:#1A1611;
+    --muted:#6E6459;
+    --rule:#DFD6C8;
+    --rule-firm:#C9BCA9;
+    --accent:#C64C09;
+    --accent-soft:#F6E2D2;
+    --pass:#2E6F4E;
+    --flag:#9A5D16;
+    --fail:#A32F1C;
+    --shadow:rgba(60,44,26,.07);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#14110D;
+      --surface:#1D1915;
+      --sunk:#242019;
+      --ink:#EFE9E0;
+      --muted:#A2978A;
+      --rule:#332C24;
+      --rule-firm:#4A4036;
+      --accent:#FF8340;
+      --accent-soft:#3A2314;
+      --pass:#63B98C;
+      --flag:#D99A3D;
+      --fail:#E5765F;
+      --shadow:rgba(0,0,0,.34);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14110D;
+    --surface:#1D1915;
+    --sunk:#242019;
+    --ink:#EFE9E0;
+    --muted:#A2978A;
+    --rule:#332C24;
+    --rule-firm:#4A4036;
+    --accent:#FF8340;
+    --accent-soft:#3A2314;
+    --pass:#63B98C;
+    --flag:#D99A3D;
+    --fail:#E5765F;
+    --shadow:rgba(0,0,0,.34);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:Spectral,Georgia,"Times New Roman",serif;
+    font-size:17px;
+    line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1040px;margin:0 auto;padding-inline:22px;padding-block:0 76px}
+  .col{max-width:68ch}
+
+  /* ---- type scale ---- */
+  h1,h2,h3{text-wrap:balance;margin:0}
+  h1{font-size:clamp(2.3rem,6vw,3.4rem);font-weight:700;line-height:1.06;letter-spacing:-.018em}
+  h2{font-size:clamp(1.5rem,3.4vw,1.95rem);font-weight:600;line-height:1.18;letter-spacing:-.01em}
+  h3{font-size:1.11rem;font-weight:600;line-height:1.3}
+  p{margin:0}
+  a{color:var(--accent)}
+
+  .eyebrow{
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.685rem;font-weight:600;
+    letter-spacing:.15em;text-transform:uppercase;
+    color:var(--muted);
+  }
+  .lede{font-size:1.16rem;line-height:1.55;color:var(--ink)}
+  .note{font-size:.935rem;color:var(--muted);line-height:1.55}
+  code,.m{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:.86em;font-variant-ligatures:none}
+  code{background:var(--sunk);padding:.1em .36em;border-radius:3px;color:var(--ink)}
+  em.term{font-style:italic;color:var(--ink)}
+
+  /* ---- masthead ---- */
+  header.mast{
+    border-bottom:2px solid var(--ink);
+    padding-block:52px 26px;
+    display:flex;flex-direction:column;gap:20px;
+  }
+  .mast-top{display:flex;justify-content:space-between;align-items:baseline;gap:18px;flex-wrap:wrap}
+  .machine{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:.7rem;letter-spacing:.08em;color:var(--muted);text-align:right}
+
+  /* ---- live strip ---- */
+  .strip{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+    gap:0;border:1px solid var(--rule);border-radius:5px;overflow:hidden;
+    background:var(--surface);margin-block:34px;
+  }
+  .strip div{padding:13px 15px;border-right:1px solid var(--rule)}
+  .strip div:last-child{border-right:0}
+  .strip dt{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:.63rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+  .strip dd{margin:0;font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:1.12rem;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+  /* ---- sections ---- */
+  section{margin-block:64px;display:flex;flex-direction:column;gap:21px}
+  .sec-head{display:flex;flex-direction:column;gap:9px;border-top:1px solid var(--rule-firm);padding-top:16px}
+
+  /* ---- figures ---- */
+  figure{margin:0;display:flex;flex-direction:column;gap:11px}
+  .figbox{
+    background:var(--surface);border:1px solid var(--rule);border-radius:6px;
+    padding:22px 18px;overflow-x:auto;
+  }
+  .figbox svg{display:block;max-width:100%;height:auto;margin:0 auto;min-width:600px}
+  figcaption{font-size:.9rem;color:var(--muted);line-height:1.5;max-width:70ch}
+  figcaption b{color:var(--ink);font-weight:600}
+
+  /* ---- formula block ---- */
+  .formula{
+    background:var(--sunk);border-left:3px solid var(--accent);
+    border-radius:0 5px 5px 0;padding:17px 20px;
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.88rem;line-height:1.85;overflow-x:auto;
+    font-variant-numeric:tabular-nums;
+  }
+  .formula .lbl{color:var(--muted);font-size:.8rem}
+
+  /* ---- audit checks ---- */
+  .check{
+    border:1px solid var(--rule);border-radius:6px;background:var(--surface);
+    display:flex;flex-direction:column;gap:0;overflow:hidden;
+  }
+  .check-hd{
+    display:flex;align-items:center;gap:11px;padding:13px 17px;
+    border-bottom:1px solid var(--rule);flex-wrap:wrap;
+  }
+  .check-hd h3{flex:1;min-width:210px}
+  .verdict{
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.64rem;font-weight:600;letter-spacing:.11em;text-transform:uppercase;
+    padding:4px 9px;border-radius:3px;white-space:nowrap;
+  }
+  .v-pass{background:var(--pass);color:var(--paper)}
+  .v-flag{background:var(--flag);color:var(--paper)}
+  .check-body{padding:16px 17px;display:flex;flex-direction:column;gap:13px}
+
+  table{border-collapse:collapse;width:100%;font-size:.88rem}
+  .tbl-scroll{overflow-x:auto}
+  th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--rule)}
+  th{
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.63rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;border-bottom:1px solid var(--rule-firm);
+  }
+  td.num{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  tbody tr:last-child td{border-bottom:0}
+
+  /* ---- findings ---- */
+  .finding{
+    display:grid;grid-template-columns:auto 1fr;gap:5px 15px;
+    padding:17px 0;border-bottom:1px solid var(--rule);align-items:start;
+  }
+  .finding:last-child{border-bottom:0}
+  .fid{
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.72rem;font-weight:600;color:var(--accent);
+    padding-top:.35em;letter-spacing:.04em;
+  }
+  .finding h3{grid-column:2;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .v-open{background:var(--flag);color:var(--paper)}
+  .v-none{background:var(--muted);color:var(--paper)}
+  .finding .body{grid-column:2;display:flex;flex-direction:column;gap:9px}
+  .src{
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.73rem;color:var(--muted);
+  }
+
+  .callout{
+    background:var(--accent-soft);border-radius:6px;padding:17px 20px;
+    display:flex;flex-direction:column;gap:8px;
+  }
+  .callout .eyebrow{color:var(--accent)}
+
+  /* ---- tabs ---- */
+  .tablist{
+    display:flex;gap:0;margin-top:30px;
+    border-bottom:1px solid var(--rule-firm);
+  }
+  .tablist button{
+    appearance:none;background:none;border:0;
+    border-bottom:2px solid transparent;margin-bottom:-1px;
+    padding:11px 18px 12px;cursor:pointer;
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.72rem;font-weight:600;letter-spacing:.11em;text-transform:uppercase;
+    color:var(--muted);transition:color .15s,border-color .15s;
+  }
+  .tablist button:hover{color:var(--ink)}
+  .tablist button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+  .tablist button:focus-visible{outline:2px solid var(--accent);outline-offset:-3px;border-radius:3px}
+  .panel[hidden]{display:none!important}
+  .panel > section:first-of-type{margin-top:46px}
+
+  /* ---- flow steps ---- */
+  .steps{display:flex;flex-direction:column;gap:0;counter-reset:step}
+  .step{
+    display:grid;grid-template-columns:auto 1fr;gap:4px 16px;
+    padding:18px 0;border-bottom:1px solid var(--rule);align-items:start;
+  }
+  .step:last-child{border-bottom:0}
+  .step-n{
+    font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    font-size:.72rem;font-weight:600;color:var(--accent);
+    padding-top:.4em;letter-spacing:.04em;font-variant-numeric:tabular-nums;
+  }
+  .step h3{grid-column:2}
+  .step .body{grid-column:2;display:flex;flex-direction:column;gap:9px}
+
+  footer{border-top:2px solid var(--ink);margin-top:70px;padding-top:18px}
+
+  @media (max-width:600px){
+    body{font-size:16px}
+    .strip div{border-right:0;border-bottom:1px solid var(--rule)}
+    .strip div:last-child{border-bottom:0}
+    .finding{grid-template-columns:1fr;gap:7px}
+    .finding h3,.finding .body{grid-column:1}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+
+<style>
+  .partmark{display:flex;flex-direction:column;gap:6px;margin-top:40px;padding-bottom:6px}
+  .partmark h2{font-size:1.5rem}
+  .partbreak{border-top:2px solid var(--ink);margin-top:60px;
+    break-before:page;page-break-before:always}
+  @page{size:letter;margin:15mm 14mm}
+  @media print{
+    html,body{background:#fff!important}
+    body{font-size:10.5pt;line-height:1.5}
+    .wrap{max-width:none;padding-inline:0;padding-block:0}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    h1{font-size:26pt} h2{font-size:15pt} h3{font-size:11pt}
+    section{margin-block:26px}
+    .sec-head,.partmark{break-after:avoid;page-break-after:avoid}
+    figure,.check,.formula,.callout,.finding,.step,table{
+      break-inside:avoid;page-break-inside:avoid}
+    .figbox{overflow:visible}
+    .figbox svg{min-width:0!important;width:100%}
+    .tbl-scroll{overflow:visible}
+    header.mast{padding-block:0 20px}
+    footer{margin-top:34px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="mast-top">
+      <span class="eyebrow">Proof-of-work audit</span>
+      <span class="machine">Apple M2 · 4P+4E · 8 GB<br>11 Sep 2026</span>
+    </div>
+    <h1>Two Proofs&nbsp;of Work</h1>
+    <p class="lede col">This machine contains two entirely different answers to the question
+      <em class="term">what makes a hash valid</em>. One is RandomX, running right now and paid in
+      accepted shares. The other is a hand-built geometric predicate in <code>miner_v3</code> that
+      decides validity by <em class="term">angular distance</em> rather than integer comparison.
+      This maps the math of both and checks it against live numbers.</p>
+  </header>
+
+  <dl class="strip">
+    <div><dt>Algorithm</dt><dd>rx/0</dd></div>
+    <div><dt>Hashrate</dt><dd>2,993 H/s</dd></div>
+    <div><dt>Pool diff</dt><dd>89,186</dd></div>
+    <div><dt>Shares</dt><dd>149 / 0</dd></div>
+    <div><dt>Dataset</dt><dd>2,080 MiB</dd></div>
+  </dl>
+
+  <div class="panel">
+    <div class="partmark"><span class="eyebrow">Part one</span><h2>The math</h2></div>
+
+  <!-- ============ 1. THE TWO PATHS ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="eyebrow">01 — Orientation</span>
+      <h2>Only one of these paths earns</h2>
+    </div>
+    <p class="col">The distinction matters before any math: XMRig is a stock binary running a
+      standardised algorithm against a public pool, and its output is verified continuously by a
+      third party that rejects wrong answers. <code>miner_v3</code> is your own code, and nothing
+      external has ever validated its geometric path. An audit of the first is a check on
+      configuration; an audit of the second is a check on the mathematics.</p>
+
+    <figure>
+      <div class="figbox">
+        <svg viewBox="0 0 820 250" role="img" aria-label="XMRig runs RandomX against the MoneroOcean pool, which verifies every share; miner_v3 runs against a local node and its geometric path is verified by nothing external.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+            </marker>
+            <marker id="ar-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="#DD6410"/>
+            </marker>
+          </defs>
+
+          <text x="0" y="14" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="#DD6410" letter-spacing="1.4">LIVE — EARNING</text>
+          <rect x="0" y="26" width="150" height="56" rx="4" fill="none" stroke="#DD6410" stroke-width="1.6"/>
+          <text x="75" y="49" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12.5" font-weight="600" fill="currentColor">XMRig 6.26</text>
+          <text x="75" y="66" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".72">RandomX rx/0</text>
+
+          <line x1="152" y1="54" x2="266" y2="54" stroke="#DD6410" stroke-width="1.6" marker-end="url(#ar-a)"/>
+          <text x="209" y="45" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".8">share</text>
+
+          <rect x="268" y="26" width="168" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="352" y="49" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">MoneroOcean</text>
+          <text x="352" y="66" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".72">re-hashes every share</text>
+
+          <line x1="438" y1="54" x2="552" y2="54" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+          <text x="495" y="45" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".8">accept</text>
+
+          <rect x="554" y="26" width="166" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="637" y="49" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">149 accepted</text>
+          <text x="637" y="66" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".72">0 rejected</text>
+
+          <text x="740" y="50" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#DD6410">external</text>
+          <text x="740" y="64" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#DD6410">proof</text>
+
+          <line x1="0" y1="112" x2="820" y2="112" stroke="currentColor" stroke-width="1" opacity=".22"/>
+
+          <text x="0" y="144" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="currentColor" opacity=".6" letter-spacing="1.4">DORMANT — LAST RUN 3 AUG</text>
+          <rect x="0" y="156" width="150" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <text x="75" y="179" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12.5" font-weight="600" fill="currentColor">miner_v3</text>
+          <text x="75" y="196" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".72">BTC / LTC</text>
+
+          <line x1="152" y1="184" x2="266" y2="184" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+          <text x="209" y="175" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".8">submitblock</text>
+
+          <rect x="268" y="156" width="168" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <text x="352" y="179" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">local regtest node</text>
+          <text x="352" y="196" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".72">private chain</text>
+
+          <line x1="438" y1="184" x2="552" y2="184" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+
+          <rect x="554" y="156" width="166" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <text x="637" y="179" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="12" fill="currentColor">coins with</text>
+          <text x="637" y="196" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".72">no value</text>
+
+          <text x="740" y="180" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".6">no external</text>
+          <text x="740" y="194" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".6">check</text>
+        </svg>
+      </div>
+      <figcaption><b>The pool is the audit.</b> Every share XMRig submits is re-hashed by MoneroOcean;
+        149 accepted with 0 rejected is an independent party confirming the RandomX implementation
+        is correct. The <code>miner_v3</code> path terminates in a private regtest chain, so nothing
+        outside this machine has ever checked its arithmetic.</figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 2. RANDOMX ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="eyebrow">02 — RandomX</span>
+      <h2>What one hash actually costs</h2>
+    </div>
+    <p class="col">RandomX is deliberately built so that a general-purpose CPU is the most efficient
+      machine to run it. It achieves this by generating a <em class="term">random program</em> per
+      hash and executing it in a small virtual machine, so the work cannot be reduced to a fixed
+      circuit. The consequence for you is memory: the algorithm's whole design premise is a
+      2 GB working set that must stay resident.</p>
+
+    <figure>
+      <div class="figbox">
+        <svg viewBox="0 0 840 380" role="img" aria-label="RandomX pipeline: a seed key expands via Argon2d into a 256 MiB cache and then a 2080 MiB dataset; each hash fills a 2 MiB scratchpad, runs 8 programs of 2048 iterations each reading 64 bytes from the dataset, then folds down to a 256-bit result compared against the target.">
+          <defs>
+            <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+            </marker>
+            <marker id="a2o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="#DD6410"/>
+            </marker>
+          </defs>
+
+          <!-- setup band -->
+          <text x="0" y="13" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".62" letter-spacing="1.3">ONCE PER SEED — EVERY 2048 BLOCKS</text>
+
+          <rect x="0" y="24" width="128" height="50" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="64" y="44" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">seed key K</text>
+          <text x="64" y="60" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">key block hash</text>
+
+          <line x1="130" y1="49" x2="196" y2="49" stroke="currentColor" stroke-width="1.3" marker-end="url(#a2)"/>
+          <text x="163" y="41" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".8">Argon2d</text>
+
+          <rect x="198" y="24" width="128" height="50" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="262" y="44" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">Cache</text>
+          <text x="262" y="60" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">256 MiB</text>
+
+          <line x1="328" y1="49" x2="394" y2="49" stroke="currentColor" stroke-width="1.3" marker-end="url(#a2)"/>
+          <text x="361" y="41" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".8">Superscalar</text>
+
+          <rect x="396" y="24" width="150" height="50" rx="4" fill="none" stroke="#DD6410" stroke-width="1.7"/>
+          <text x="471" y="44" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" fill="currentColor">Dataset</text>
+          <text x="471" y="60" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#DD6410">2,080 MiB resident</text>
+
+          <text x="560" y="43" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".75">fast mode trades</text>
+          <text x="560" y="57" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".75">RAM for ~5x speed</text>
+
+          <line x1="0" y1="100" x2="840" y2="100" stroke="currentColor" stroke-width="1" opacity=".2"/>
+
+          <!-- per-hash band -->
+          <text x="0" y="128" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".62" letter-spacing="1.3">PER HASH — ×8 THREADS, ~3,000 TIMES A SECOND</text>
+
+          <rect x="0" y="142" width="112" height="48" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="56" y="162" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">blob+nonce</text>
+          <text x="56" y="177" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">Blake2b</text>
+
+          <line x1="114" y1="166" x2="170" y2="166" stroke="currentColor" stroke-width="1.3" marker-end="url(#a2)"/>
+
+          <rect x="172" y="142" width="120" height="48" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="232" y="162" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">Scratchpad</text>
+          <text x="232" y="177" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">2 MiB per thread</text>
+
+          <line x1="294" y1="166" x2="350" y2="166" stroke="currentColor" stroke-width="1.3" marker-end="url(#a2)"/>
+
+          <!-- VM loop -->
+          <rect x="352" y="130" width="230" height="118" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <text x="467" y="152" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" fill="currentColor">RandomX VM</text>
+          <text x="467" y="170" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".78">8 programs × 2,048 iters</text>
+          <text x="467" y="186" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".78">256 random instructions</text>
+          <text x="467" y="202" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".78">8 int + 12 float regs</text>
+          <text x="467" y="224" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="#DD6410">16,384 dataset reads</text>
+          <text x="467" y="239" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".7">64 B each, address = prior state</text>
+
+          <!-- dataset feeds VM -->
+          <path d="M 471 76 L 471 104 L 467 104 L 467 128" fill="none" stroke="#DD6410" stroke-width="1.5" marker-end="url(#a2o)"/>
+
+          <line x1="584" y1="166" x2="640" y2="166" stroke="currentColor" stroke-width="1.3" marker-end="url(#a2)"/>
+          <text x="612" y="158" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".8">AesHash</text>
+
+          <rect x="642" y="142" width="128" height="48" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="706" y="162" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">256-bit result</text>
+          <text x="706" y="177" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">little-endian int</text>
+
+          <!-- verdict -->
+          <path d="M 706 192 L 706 268" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#a2)"/>
+          <rect x="576" y="270" width="264" height="44" rx="4" fill="none" stroke="#DD6410" stroke-width="1.7"/>
+          <text x="708" y="289" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" fill="currentColor">result ≤ target ?</text>
+          <text x="708" y="305" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#DD6410">target = 2²⁵⁶ / 89,186</text>
+
+          <text x="0" y="286" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".75">Memory held by the miner:</text>
+          <text x="0" y="303" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".75">2,080 MiB dataset (shared) + 8 × 2 MiB scratchpad = 2,096 MiB</text>
+          <text x="0" y="320" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#DD6410">Observed RSS: 2,204 MB — agrees to within 3%</text>
+
+          <line x1="0" y1="344" x2="840" y2="344" stroke="currentColor" stroke-width="1" opacity=".2"/>
+          <text x="0" y="366" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".62">One hash ≈ 16,384 random 64-byte reads into a 2 GB region — which is why this algorithm is bound by memory latency, not arithmetic.</text>
+        </svg>
+      </div>
+      <figcaption><b>The dataset is the algorithm.</b> Those 16,384 unpredictable reads per hash into a
+        2 GB region are the entire anti-ASIC mechanism: the address of each read depends on the result
+        of the previous one, so nothing can be prefetched or pipelined away.</figcaption>
+    </figure>
+
+    <div class="callout col">
+      <span class="eyebrow">Why this explains the RAM finding</span>
+      <p>The earlier hashrate collapse — 3,361 H/s down to 1,918 — was never CPU contention. If any
+        part of that 2,080 MiB dataset is compressed or swapped out, the next read that lands on it
+        stalls on page-fault latency instead of DRAM latency, roughly three orders of magnitude
+        worse. With 8 GB total and 121 MB free, macOS's compressor is competing directly with the
+        one structure the algorithm cannot do without.</p>
+    </div>
+  </section>
+
+  <!-- ============ 3. VALIDATION ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="eyebrow">03 — Validation</span>
+      <h2>Checking the live miner against theory</h2>
+    </div>
+    <p class="col">Share-based mining makes two predictions that can be tested without trusting
+      either the miner or the pool. Both follow from a single fact: a hash passes when the 256-bit
+      result falls below the target, and that happens with probability
+      <span class="m">p = target / 2²⁵⁶ = 1 / difficulty</span>.</p>
+
+    <div class="formula col">
+      <span class="lbl">// finding a share is a geometric process with success probability 1/D</span><br>
+      E[hashes per share]  =  D<br>
+      E[seconds per share] =  D / H<br><br>
+      <span class="lbl">// the count of shares after N hashes is Poisson, so relative error falls as</span><br>
+      σ/μ  =  1 / √n
+    </div>
+
+    <div class="check">
+      <div class="check-hd">
+        <h3>Check 1 — Hashes consumed per share</h3>
+        <span class="verdict v-pass">Consistent</span>
+      </div>
+      <div class="check-body">
+        <p class="note">If the miner's counter and the pool's difficulty disagree, the ratio drifts
+          from 1. Two independent sessions, one before the launchd cutover and one after:</p>
+        <div class="tbl-scroll">
+          <table>
+            <thead>
+              <tr><th>Session</th><th>Shares n</th><th>Hashes</th><th>Per share</th><th>Difficulty</th><th>Ratio</th><th>1/√n</th><th>Deviation</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Pre-cutover</td><td class="num">2,491</td><td class="num">253,579,761</td><td class="num">101,798</td><td class="num">99,248</td><td class="num">1.026</td><td class="num">±2.0%</td><td class="num">1.3 σ</td></tr>
+              <tr><td>Post-cutover</td><td class="num">149</td><td class="num">12,042,080</td><td class="num">80,819</td><td class="num">89,186</td><td class="num">0.906</td><td class="num">±8.2%</td><td class="num">1.1 σ</td></tr>
+              <tr><td>Same, 2.6 h in</td><td class="num">311</td><td class="num">25,859,050</td><td class="num">83,148</td><td class="num">81,486</td><td class="num">1.020</td><td class="num">±5.7%</td><td class="num">0.4 σ</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">All three land within about one standard deviation of the predicted ratio of
+          1.000, and the deviation shrinks as n grows — 1.3 σ, then 1.1 σ, then 0.4 σ. That is exactly
+          the behaviour a genuine Poisson process produces. A broken nonce counter or a mismatched
+          difficulty would instead show a fixed multiplicative offset that does <em>not</em> shrink.
+          The third row is approximate on one point: the pool moved the difficulty during that
+          session, so 81,486 is the closing value rather than the average across all 311 shares.</p>
+      </div>
+    </div>
+
+    <div class="check">
+      <div class="check-hd">
+        <h3>Check 2 — Share interval against hashrate</h3>
+        <span class="verdict v-pass">Consistent</span>
+      </div>
+      <div class="check-body">
+        <div class="formula">
+          predicted  D / H  =  89,186 / 2,993  =  29.8 s<br>
+          observed   avg_time             =  27.0 s<br>
+          <span class="lbl">// ratio 0.91 — within sampling error at n = 149, and biased low because<br>
+          // avg_time is a rolling mean taken while the 15-minute hashrate was still filling</span>
+        </div>
+        <p class="note">This is the check that would catch a miner reporting inflated hashrate: a
+          fabricated H would predict an interval the pool's clock does not confirm. It does confirm it.</p>
+      </div>
+    </div>
+
+    <p class="col note"><b>What these checks do not prove.</b> They confirm the miner and pool agree
+      about the amount of work performed. They say nothing about payout accounting — whether
+      MoneroOcean credits those shares correctly is outside anything observable from this machine.</p>
+  </section>
+
+  <!-- ============ 4. GEOMETRIC POW ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="eyebrow">04 — miner_v3</span>
+      <h2>The geometric predicate</h2>
+    </div>
+    <p class="col">Here the audit gets interesting. <code>miner_v3</code> can decide a hash is valid
+      by a rule Bitcoin has never heard of: it maps the hash to four angles on a circle, measures
+      the mean angular distance to a target direction, and accepts if that distance is small enough.
+      The obvious question is whether such a rule can be calibrated to a given difficulty at all —
+      and, separately, whether a block found this way is a block anyone else would accept.</p>
+
+    <figure>
+      <div class="figbox">
+        <svg viewBox="0 0 820 300" role="img" aria-label="miner_v3 branches at use_consensus_pow: with a valid block template it runs real SHA256d or scrypt against the consensus target; without one it runs the geometric clock-hash and angle-distance predicate.">
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+            </marker>
+            <marker id="a3o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon points="0,0 10,5 0,10" fill="#DD6410"/>
+            </marker>
+          </defs>
+
+          <rect x="0" y="108" width="132" height="52" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="66" y="129" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">80-byte header</text>
+          <text x="66" y="145" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">76 base + nonce</text>
+
+          <line x1="134" y1="134" x2="196" y2="134" stroke="currentColor" stroke-width="1.3" marker-end="url(#a3)"/>
+
+          <!-- branch diamond -->
+          <polygon points="266,96 348,134 266,172 184,134" fill="none" stroke="#DD6410" stroke-width="1.7"/>
+          <text x="266" y="129" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor">template</text>
+          <text x="266" y="144" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor">valid ?</text>
+
+          <!-- consensus branch -->
+          <path d="M 266 94 L 266 56 L 416 56" fill="none" stroke="currentColor" stroke-width="1.4" marker-end="url(#a3)"/>
+          <text x="300" y="48" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".85">yes — real chain work</text>
+
+          <rect x="418" y="30" width="180" height="52" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="508" y="51" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">SHA256d / scrypt</text>
+          <text x="508" y="67" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">pow_meets_target</text>
+
+          <line x1="600" y1="56" x2="656" y2="56" stroke="currentColor" stroke-width="1.3" marker-end="url(#a3)"/>
+          <rect x="658" y="30" width="162" height="52" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <text x="739" y="51" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">hash ≤ target</text>
+          <text x="739" y="67" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">network accepts</text>
+
+          <!-- geom branch -->
+          <path d="M 266 174 L 266 214 L 416 214" fill="none" stroke="#DD6410" stroke-width="1.4" marker-end="url(#a3o)"/>
+          <text x="300" y="206" font-family="IBM Plex Mono, monospace" font-size="10" fill="#DD6410">no — demo / offline</text>
+
+          <rect x="418" y="188" width="180" height="52" rx="4" fill="none" stroke="#DD6410" stroke-width="1.4"/>
+          <text x="508" y="209" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="currentColor">clock_hash_256</text>
+          <text x="508" y="225" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".7">→ 4 angles on a circle</text>
+
+          <line x1="600" y1="214" x2="656" y2="214" stroke="#DD6410" stroke-width="1.3" marker-end="url(#a3o)"/>
+          <rect x="658" y="188" width="162" height="52" rx="4" fill="none" stroke="#DD6410" stroke-width="1.4"/>
+          <text x="739" y="209" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">dist &lt; threshold</text>
+          <text x="739" y="225" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#DD6410">network rejects</text>
+
+          <line x1="0" y1="262" x2="820" y2="262" stroke="currentColor" stroke-width="1" opacity=".2"/>
+          <text x="0" y="284" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".68">use_consensus_pow() returns g_tmpl.valid in auto mode — so whenever real work exists, the real rule runs. src/main.c:1152</text>
+        </svg>
+      </div>
+      <figcaption><b>The branch is the safeguard.</b> In <code>auto</code> mode the geometric predicate
+        is reachable only when no block template is held. The moment real chain work arrives, the
+        code switches to the coin's actual consensus rule — which is why this design is sound in
+        normal operation, and why forcing <code>--pow geom</code> is the one way to defeat it.</figcaption>
+    </figure>
+
+    <h3 class="col">The calibration is correct</h3>
+    <p class="col">The hard part of a custom predicate is making it accept at the rate the difficulty
+      demands. <code>scale.c</code> does this properly, and the derivation checks out:</p>
+
+    <div class="formula col">
+      <span class="lbl">// two independent uniform angles on a circle</span><br>
+      gap = |θ₁ − θ₂| folded to [0, π]   ~  Uniform(0, π)<br><br>
+      <span class="lbl">// angle_distance averages 4 such gaps (POINT88D_PARTS = 4)</span><br>
+      distance = (π/4) · S,   S = U₁+U₂+U₃+U₄  ~  Irwin–Hall(4)<br><br>
+      <span class="lbl">// so the threshold that accepts with probability p is</span><br>
+      t = (π/4) · F⁻¹(p),    F = Irwin–Hall(4) CDF<br>
+      p = mantissa · 2^(8·exp − 280)    <span class="lbl">// straight from compact bits</span>
+    </div>
+
+    <p class="col">Three things make this hold up. The declared <span class="m">n = 4</span> matches
+      <span class="m">POINT88D_PARTS = 4</span> in <code>point.h</code> — had those diverged, every
+      threshold would be wrong, because the mean of <em>n</em> uniforms concentrates sharply as
+      <em>n</em> grows. The inversion uses the exact closed form
+      <span class="m">F⁻¹(p) = (24p)^¼</span> on the lower tail rather than bisecting, which is
+      what keeps precision at the very small probabilities real difficulties require. And the bits
+      are converted to a probability directly via <span class="m">pow()</span>, sidestepping the
+      undefined-behaviour shift that integer decoding hits at <span class="m">exp &gt; 29</span>.</p>
+  </section>
+
+  <!-- ============ 5. FINDINGS ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="eyebrow">05 — Findings</span>
+      <h2>What the audit turned up</h2>
+    </div>
+
+    <div class="finding">
+      <span class="fid">F1</span>
+      <h3>The implementation notes contradict the code <span class="verdict v-pass">Fixed</span></h3>
+      <div class="body">
+        <p><code>IMPLEMENTATION_NOTES.md</code> opens: <em>"The miner runs Geometric PoW only. There
+          is no unified or hybrid mode; the single entry path is run_mining_geometric()."</em> That is
+          not what <code>main.c</code> does. <code>use_consensus_pow()</code> returns
+          <code>g_tmpl.valid</code> under the default <code>auto</code> mode, so real SHA256d or
+          scrypt runs whenever a template is held.</p>
+        <p>This matters more than a stale comment usually would: anyone auditing from the docs would
+          conclude the miner cannot produce valid blocks, when in fact its default path is correct.
+          The document understated the code.</p>
+        <p><b>Fixed 11 Sep.</b> The notes now carry a <code>--pow</code> mode table, separate the
+          shared search order from the branching validity rule, and document the
+          <code>--pow geom</code> hazard below. Both stale claims — the header and the
+          Conclusion — are gone.</p>
+        <p class="src">src/main.c:1152–1157 · IMPLEMENTATION_NOTES.md:3</p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <span class="fid">F2</span>
+      <h3>Half of each hash was discarded before the angle comparison <span class="verdict v-pass">Fixed</span></h3>
+      <div class="body">
+        <p><code>point_from_bytes</code> packs eight bytes into each 64-bit part, big-endian. But
+          <code>part_to_angle</code> reads only <code>part &amp; 0xFFFFFFFF</code> — the low 32 bits.
+          The upper four bytes of every part never reach the comparison, so bytes 0–3, 8–11, 16–19
+          and 24–27 of the 32-byte hash are unused.</p>
+        <p>The calibration survived this — the surviving 16 bytes are still uniform, so the
+          Irwin–Hall model and every threshold stayed correct. What was lost is collision
+          resistance: the predicate effectively decided on a 128-bit digest.</p>
+        <p><b>Fixed 11 Sep.</b> <code>part_to_angle</code> now rescales the full 64-bit part by
+          <span class="m">2⁻⁶⁴</span>. Two things had to move with it.
+          <code>angle_rotate</code> used to round-trip through the low 32 bits while preserving the
+          high ones, which is incoherent once the angle depends on all 64 — it now goes through a
+          matching <code>angle_to_part</code> inverse, with clamping so a frac of 1.0 cannot
+          overflow the <span class="m">uint64_t</span> conversion. It has no callers, so nothing
+          outside <code>angle.c</code> was affected. The Metal shader carries its own copy of
+          <code>part_to_angle</code> and had to be widened identically, or every GPU find would
+          fail CPU re-verification.</p>
+        <p>The claim that calibration is unaffected was then tested rather than assumed —
+          400,000 random digests at each of five probabilities:</p>
+        <div class="tbl-scroll">
+          <table>
+            <thead><tr><th>Target p</th><th>Threshold (rad)</th><th>Observed</th><th>Deviation</th></tr></thead>
+            <tbody>
+              <tr><td class="num">0.200</td><td class="num">1.177243</td><td class="num">0.20017</td><td class="num">0.28 σ</td></tr>
+              <tr><td class="num">0.100</td><td class="num">0.979061</td><td class="num">0.09935</td><td class="num">1.38 σ</td></tr>
+              <tr><td class="num">0.050</td><td class="num">0.822029</td><td class="num">0.04966</td><td class="num">0.99 σ</td></tr>
+              <tr><td class="num">0.010</td><td class="num">0.549721</td><td class="num">0.01016</td><td class="num">1.03 σ</td></tr>
+              <tr><td class="num">0.001</td><td class="num">0.309131</td><td class="num">0.00102</td><td class="num">0.45 σ</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">Acceptance tracks the predicted rate across five orders of magnitude. Note
+          the fix changes <em>which</em> nonces the geometric path accepts, so any previously
+          recorded geometric solution will not re-validate. No consensus impact — this is the
+          offline path only.</p>
+        <p class="src">src/angle.c:24–48 · shaders/clock_hash.metal:132 · verified by build + 400k-sample trial</p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <span class="fid">F3</span>
+      <h3><code>--pow geom</code> with live work would submit invalid blocks <span class="verdict v-pass">Fixed</span></h3>
+      <div class="body">
+        <p>The <code>auto</code> guard cannot be reached in this state, but an explicit
+          <code>--pow geom</code> overrides it while a template is still valid. The accept macro then
+          fires on angle distance and calls <code>submit_assembled_block</code> regardless.</p>
+        <p>The two predicates are independent events of equal probability <span class="m">p</span>.
+          An angle-passing nonce therefore satisfies Bitcoin's rule with probability
+          <span class="m">p</span>, not 1 — so <span class="m">P(both) = p²</span>, which at any real
+          difficulty is never. Every submission returns <code>high-hash</code>. Nothing is lost but
+          time, and no invalid chain can result, since the node is the one rejecting it.</p>
+        <p><b>Fixed 11 Sep.</b> The accept path now tests <code>consensus_mode</code> before
+          submitting: a geometric find against real chain work is reported and withheld from the
+          node. A startup warning also fires whenever <code>--pow geom</code> is given, since the
+          mode can only produce network-invalid headers. Offline geometric mining, with no template,
+          is unchanged.</p>
+        <p class="src">src/main.c:1588 (NONCE_MEETS_POW) · src/main.c:1610 · verified: warning fires for <code>geom</code>, silent for <code>auto</code></p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <span class="fid">F6</span>
+      <h3>The nonce walk skipped 91% of the search space <span class="verdict v-pass">Fixed</span></h3>
+      <div class="body">
+        <p>Found while testing the claim in <code>IMPLEMENTATION_NOTES.md</code> that the search
+          order is a permutation. It was not. The walk
+          <span class="m">nonce(off) = start + ((phase + off·step) mod count)</span> visits every
+          nonce only when <span class="m">gcd(step, count) = 1</span>.
+          <code>thesis_golden_step()</code> forced the step odd and assumed that sufficed — its own
+          comment said "coprime to 2^k cell sizes <em>more often</em>".</p>
+        <p>The real 88D cell is <span class="m">count = 48,806,446</span>, whose golden step
+          <span class="m">30,164,043</span> shares a factor of <b>13</b>. Each cell scan therefore
+          cycled through 1/13 of its nonces — 3,754,342 of 48,806,446 — and re-tested that same
+          7.7% indefinitely.</p>
+        <div class="tbl-scroll">
+          <table>
+            <thead><tr><th>Measure</th><th>Before</th><th>After</th></tr></thead>
+            <tbody>
+              <tr><td>Cells with gcd ≠ 1</td><td class="num">87 of 88</td><td class="num">0 of 88</td></tr>
+              <tr><td>Nonce space unreachable</td><td class="num">91.3%</td><td class="num">0.0%</td></tr>
+              <tr><td>Violations, count = 1…200,000</td><td class="num">37,880</td><td class="num">0</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>This hit <b>both</b> PoW modes — StoryLattice orders the search under the real consensus
+          rule too, so Bitcoin and Litecoin mining were losing the same coverage. The step now
+          advances to the nearest coprime, which stays within one or two of the golden ratio.</p>
+        <p class="note">Two things kept this hidden. The threading argument in the notes is
+          unaffected — the <em>set</em> of nonces is independent of consumption order whether or not
+          the walk is a permutation — so the parallelism looked sound. And
+          <code>make test-mine</code>'s "hash count == cell size" assertion passed throughout,
+          because it counts hashes rather than distinct nonces. All 8 tests still pass after the fix.</p>
+        <p class="src">src/thesis_search.c:thesis_golden_step · verified by exhaustive cell walk + 200k-size sweep</p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <span class="fid">F4</span>
+      <h3>The consensus comparison itself is correct <span class="verdict v-none">No action</span></h3>
+      <div class="body">
+        <p><code>pow_meets_target</code> reverses the little-endian hash and walks it against the
+          big-endian target most-significant byte first, returning early on the first difference and
+          treating equality as a pass. That matches Bitcoin's <span class="m">hash ≤ target</span>
+          exactly, including the boundary case. No issue.</p>
+        <p class="src">src/main.c:1142–1149</p>
+      </div>
+    </div>
+
+    <div class="finding">
+      <span class="fid">F5</span>
+      <h3>The RandomX path needs no code audit — it needs memory <span class="verdict v-open">Open</span></h3>
+      <div class="body">
+        <p>XMRig is an unmodified upstream binary and the pool re-verifies every share, so its
+          correctness is established externally and continuously. The only thing standing between
+          this machine and its full 3,450 H/s is the 2,080 MiB dataset staying resident. At 121 MB
+          free, it frequently does not.</p>
+        <p class="src">Live API · 127.0.0.1:18088/2/summary</p>
+      </div>
+    </div>
+  </section>
+
+  </div><!-- /panel-audit -->
+
+  <!-- ================= FLOW PANEL ================= -->
+  <div class="panel partbreak" id="panel-flow">
+    <div class="partmark"><span class="eyebrow">Part two</span><h2>The mining flow</h2></div>
+
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">01 — End to end</span>
+        <h2>From a double-click to a paid share</h2>
+      </div>
+      <p class="col">The previous tab takes one hash apart. This one zooms out to the whole loop: what
+        starts the miner, where the work comes from, how 8 threads divide it, what gets sent back,
+        and how the pool decides what you are owed. Every number here is from the running process.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 840 430" role="img" aria-label="End-to-end mining flow: clicking the Desktop app triggers launchd to bootstrap caffeinate and xmrig, which opens a TLS connection to MoneroOcean, receives a job, splits the nonce space across eight threads, hashes, and submits passing nonces as shares.">
+            <defs>
+              <marker id="f1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+              </marker>
+              <marker id="f1o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="#DD6410"/>
+              </marker>
+            </defs>
+
+            <!-- LANE 1: startup -->
+            <text x="0" y="13" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".62" letter-spacing="1.3">STARTUP — ONLY WHEN YOU CLICK</text>
+
+            <rect x="0" y="24" width="132" height="46" rx="4" fill="none" stroke="#DD6410" stroke-width="1.6"/>
+            <text x="66" y="43" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="currentColor">XMR Miner.app</text>
+            <text x="66" y="58" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".7">Desktop</text>
+
+            <line x1="134" y1="47" x2="192" y2="47" stroke="currentColor" stroke-width="1.3" marker-end="url(#f1)"/>
+            <text x="163" y="39" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" opacity=".8">bootstrap</text>
+
+            <rect x="194" y="24" width="132" height="46" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="260" y="43" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">launchd</text>
+            <text x="260" y="58" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".7">KeepAlive</text>
+
+            <line x1="328" y1="47" x2="386" y2="47" stroke="currentColor" stroke-width="1.3" marker-end="url(#f1)"/>
+
+            <rect x="388" y="24" width="132" height="46" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="454" y="43" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">caffeinate -i</text>
+            <text x="454" y="58" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".7">blocks idle sleep</text>
+
+            <line x1="522" y1="47" x2="580" y2="47" stroke="currentColor" stroke-width="1.3" marker-end="url(#f1)"/>
+
+            <rect x="582" y="24" width="132" height="46" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="648" y="43" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">xmrig</text>
+            <text x="648" y="58" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".7">8 threads</text>
+
+            <path d="M 260 72 L 260 88 L 648 88 L 648 72" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="3 3" marker-end="url(#f1)"/>
+            <text x="454" y="101" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" opacity=".7">restarts it within 30 s if it dies</text>
+
+            <line x1="0" y1="118" x2="840" y2="118" stroke="currentColor" stroke-width="1" opacity=".2"/>
+
+            <!-- LANE 2: the loop -->
+            <text x="0" y="144" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".62" letter-spacing="1.3">THE LOOP — ~3,000 HASHES A SECOND, FOREVER</text>
+
+            <rect x="0" y="158" width="168" height="70" rx="4" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <text x="84" y="180" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" font-weight="600" fill="currentColor">MoneroOcean</text>
+            <text x="84" y="196" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".72">gulf…:20016</text>
+            <text x="84" y="211" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".72">TLS 1.3 · 359 ms</text>
+
+            <path d="M 170 178 L 300 178" fill="none" stroke="#DD6410" stroke-width="1.5" marker-end="url(#f1o)"/>
+            <text x="235" y="170" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="#DD6410">job</text>
+
+            <rect x="302" y="152" width="200" height="84" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="402" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor">job fields</text>
+            <text x="402" y="188" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">blob · job_id · height</text>
+            <text x="402" y="203" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">seed_hash → dataset</text>
+            <text x="402" y="218" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="#DD6410">target → diff 81,486</text>
+
+            <path d="M 504 194 L 596 194" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#f1)"/>
+            <text x="550" y="186" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" opacity=".8">split</text>
+
+            <rect x="598" y="152" width="242" height="84" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="719" y="172" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor">8 threads, disjoint nonces</text>
+            <text x="719" y="189" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">each: blob + own nonce → RandomX</text>
+            <text x="719" y="205" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">no two threads test the same nonce</text>
+            <text x="719" y="222" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">~366 H/s each</text>
+
+            <!-- compare -->
+            <path d="M 719 238 L 719 268" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#f1)"/>
+            <rect x="598" y="270" width="242" height="44" rx="4" fill="none" stroke="#DD6410" stroke-width="1.6"/>
+            <text x="719" y="289" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor">result ≤ share target ?</text>
+            <text x="719" y="305" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">true once per ~81,486 hashes</text>
+
+            <!-- discard -->
+            <path d="M 596 292 L 520 292" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="3 3" marker-end="url(#f1)"/>
+            <text x="512" y="288" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".65">no → next nonce,</text>
+            <text x="512" y="301" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".65">99.9988% of the time</text>
+
+            <!-- submit back to pool -->
+            <path d="M 598 300 L 84 300 L 84 232" fill="none" stroke="#DD6410" stroke-width="1.5" marker-end="url(#f1o)"/>
+            <text x="300" y="315" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="#DD6410">yes → submit {job_id, nonce, result} — 311 accepted, 0 rejected</text>
+
+            <line x1="0" y1="340" x2="840" y2="340" stroke="currentColor" stroke-width="1" opacity=".2"/>
+
+            <!-- LANE 3 -->
+            <text x="0" y="364" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor" opacity=".62" letter-spacing="1.3">WHAT THE POOL DOES WITH IT</text>
+            <text x="0" y="386" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".78">Pool re-hashes the share to confirm it → credits your worker → aggregates every miner's shares</text>
+            <text x="0" y="403" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".78">→ when any share also clears the far smaller network target, the pool submits the block</text>
+            <text x="0" y="420" font-family="IBM Plex Mono, monospace" font-size="10" fill="#DD6410">→ reward split by share count, paid to 47zJai…wuAaLM</text>
+          </svg>
+        </div>
+        <figcaption><b>Two nested loops.</b> The inner one runs three thousand times a second and
+          almost always throws its result away. The outer one runs about twice a minute, and is the
+          only part the pool ever sees.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ==== two targets ==== -->
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">02 — The two targets</span>
+        <h2>A share is not a block</h2>
+      </div>
+      <p class="col">This is the part that most descriptions of pool mining skip, and it is the key
+        to reading your own numbers. There are two different thresholds in play, and your miner only
+        ever checks the easier one.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 820 230" role="img" aria-label="The full 256-bit hash space with two thresholds: the pool share target, cleared roughly every 81,486 hashes, and the far smaller Monero network target that a real block requires.">
+            <defs>
+              <marker id="f2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+              </marker>
+            </defs>
+
+            <text x="0" y="16" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="currentColor" opacity=".72">every possible 256-bit hash result, 0 on the left</text>
+
+            <!-- the bar -->
+            <rect x="0" y="30" width="820" height="40" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="410" y="55" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor" opacity=".55">2²⁵⁶ possible results — a hash lands here uniformly at random</text>
+
+            <!-- share target marker -->
+            <line x1="150" y1="24" x2="150" y2="76" stroke="#DD6410" stroke-width="2"/>
+            <path d="M 150 92 L 150 110" fill="none" stroke="#DD6410" stroke-width="1.3" marker-end="url(#f2)"/>
+            <text x="150" y="126" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="#DD6410">share target</text>
+            <text x="150" y="141" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">2²⁵⁶ / 81,486</text>
+            <text x="150" y="156" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">cleared every ~28 s</text>
+
+            <!-- network target marker -->
+            <line x1="18" y1="24" x2="18" y2="76" stroke="currentColor" stroke-width="2"/>
+            <path d="M 18 92 L 18 110" fill="none" stroke="currentColor" stroke-width="1.3" marker-end="url(#f2)"/>
+            <text x="18" y="126" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="currentColor">network target</text>
+            <text x="18" y="141" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">millions of times smaller —</text>
+            <text x="18" y="156" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".75">far off the left edge of this bar</text>
+
+            <line x1="0" y1="180" x2="820" y2="180" stroke="currentColor" stroke-width="1" opacity=".2"/>
+            <text x="0" y="202" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".78">Your best hash so far this session scored 112,760,056 — about 1,384× the pool's requirement,</text>
+            <text x="0" y="219" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".78">and still nowhere near a Monero block. The pool exists precisely to smooth over that gap.</text>
+          </svg>
+        </div>
+        <figcaption><b>Shares are a measuring device, not money.</b> They prove how much work you did
+          so the pool can divide a block reward fairly. The bar is not to scale — drawn honestly, the
+          network target would be invisible.</figcaption>
+      </figure>
+
+      <p class="col">This is why <code>shares: 311 / 0</code> is the number to watch and a
+        "found block" is not something you should ever expect to see locally. It also explains the
+        <span class="m">best</span> field in the API: it records the luckiest hash of the session,
+        which is interesting but earns nothing extra.</p>
+    </section>
+
+    <!-- ==== vardiff ==== -->
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">03 — Vardiff</span>
+        <h2>The pool tunes itself to your machine</h2>
+      </div>
+      <p class="col">You may have noticed the difficulty changing between readings. That is not
+        drift — it is a control loop. The pool adjusts your personal share target to hold a roughly
+        constant share interval, which keeps its estimate of your hashrate precise without flooding
+        itself with submissions.</p>
+
+      <div class="formula col">
+        <span class="lbl">// three readings taken across this session</span><br>
+        20.9 h in   D = 99,248   avg share 29.8 s<br>
+         1.6 h in   D = 89,186   avg share 27.0 s<br>
+         2.6 h in   D = 81,486   avg share 30.0 s<br><br>
+        <span class="lbl">// difficulty fell 18% while the interval stayed put — the pool tracking</span><br>
+        <span class="lbl">// a miner that restarted and came back slightly slower</span><br>
+        D / H  =  81,486 / 2,933  =  27.8 s
+      </div>
+
+      <p class="col note">A practical consequence for auditing: any check that compares lifetime
+        hashes against <em>current</em> difficulty is approximate, because the difficulty was not
+        constant over that window. That is the caveat noted on the third row of Check 1.</p>
+    </section>
+
+    <!-- ==== miner_v3 contrast ==== -->
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">04 — The other shape</span>
+        <h2>Solo mining has no pool in it</h2>
+      </div>
+      <p class="col"><code>miner_v3</code> runs a fundamentally different loop, and the contrast is
+        the clearest way to see what the pool is actually doing for you. There is no share target and
+        no external verifier — the miner asks a node for work, searches, and submits a whole block.</p>
+
+      <figure>
+        <div class="figbox">
+          <svg viewBox="0 0 820 200" role="img" aria-label="miner_v3 solo flow: getblocktemplate from the node, build an 80-byte header, search nonces against the full network target, and submit a complete block, with no intermediate share step.">
+            <defs>
+              <marker id="f3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <polygon points="0,0 10,5 0,10" fill="currentColor"/>
+              </marker>
+            </defs>
+
+            <rect x="0" y="40" width="150" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="75" y="62" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">local node</text>
+            <text x="75" y="79" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".72">getblocktemplate</text>
+
+            <line x1="152" y1="68" x2="216" y2="68" stroke="currentColor" stroke-width="1.3" marker-end="url(#f3)"/>
+            <text x="184" y="60" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" fill="currentColor" opacity=".8">bits</text>
+
+            <rect x="218" y="40" width="160" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="298" y="62" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">80-byte header</text>
+            <text x="298" y="79" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".72">coinbase → your address</text>
+
+            <line x1="380" y1="68" x2="444" y2="68" stroke="currentColor" stroke-width="1.3" marker-end="url(#f3)"/>
+
+            <rect x="446" y="40" width="160" height="56" rx="4" fill="none" stroke="#DD6410" stroke-width="1.5"/>
+            <text x="526" y="62" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">nonce search</text>
+            <text x="526" y="79" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="#DD6410">vs FULL network target</text>
+
+            <line x1="608" y1="68" x2="672" y2="68" stroke="currentColor" stroke-width="1.3" marker-end="url(#f3)"/>
+
+            <rect x="674" y="40" width="146" height="56" rx="4" fill="none" stroke="currentColor" stroke-width="1.2"/>
+            <text x="747" y="62" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11" fill="currentColor">submitblock</text>
+            <text x="747" y="79" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor" opacity=".72">whole block</text>
+
+            <text x="0" y="132" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".75">No share step at all — nothing is submitted until a nonce clears the real target.</text>
+            <text x="0" y="149" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".75">On regtest that happens instantly; on mainnet, at 97 MH/s against the real Bitcoin network,</text>
+            <text x="0" y="166" font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".75">it would not happen in any human timeframe. Which is what a pool is for.</text>
+          </svg>
+        </div>
+        <figcaption><b>The missing middle.</b> Pool mining inserts an easier, purely bookkeeping
+          threshold between "did work" and "found a block". Solo mining has only the second, so it
+          pays out either everything or — overwhelmingly likely — nothing.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ==== reading the numbers ==== -->
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">05 — Reading it live</span>
+        <h2>What each number tells you</h2>
+      </div>
+      <p class="col">Everything above is observable at
+        <code>127.0.0.1:18088/2/summary</code>. This is what to look at, and what a bad value means.</p>
+
+      <div class="tbl-scroll">
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Now</th><th>What it means</th><th>Worry when</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>rejected</code></td><td class="num">0</td><td>Shares the pool refused</td><td>Anything above ~1% of accepted</td></tr>
+            <tr><td><code>failures</code></td><td class="num">0</td><td>Dropped pool connections</td><td>Climbing — network or pool trouble</td></tr>
+            <tr><td><code>hashrate.total</code></td><td class="num">2,933</td><td>10 s / 60 s / 15 m averages</td><td>10 s far below 15 m = stalling</td></tr>
+            <tr><td><code>diff_current</code></td><td class="num">81,486</td><td>Your personal share target</td><td>Not a problem — it self-adjusts</td></tr>
+            <tr><td><code>avg_time</code></td><td class="num">30 s</td><td>Mean seconds per share</td><td>Drifts far from diff ÷ hashrate</td></tr>
+            <tr><td><code>memory.free</code></td><td class="num">121 MB</td><td>Free RAM on the box</td><td>Near zero — the dataset gets swapped</td></tr>
+            <tr><td><code>paused</code></td><td class="num">false</td><td>Whether hashing is suspended</td><td>true while you expect it running</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="col note">The single most useful of these is the hashrate triple. Because the three
+        windows are 10 s, 60 s and 15 m, a dip that appears in the first and not the third tells you
+        the problem started seconds ago — which is how the memory-pressure stalls were caught.</p>
+    </section>
+
+  </div><!-- /panel-flow -->
+
+  <footer>
+    <p class="note">Audited against the running miner and the <code>miner_v3</code> sources on
+      11 September 2026. Live figures are a point-in-time sample; the statistical checks in section 03
+      are reproducible from <code>/2/summary</code> at any later moment, and should be re-run at a
+      larger share count for a tighter bound.</p>
+  </footer>
+
+</div>
+
+
+
+</body>
+</html>
