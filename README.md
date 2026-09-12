@@ -15,6 +15,7 @@ docs/setup/          Setup Instructions (html)
 docs/randomx/        how RandomX is made, the mining audit, the M4 tune plan, Two Proofs of Work
 docs/designs/        the interactive TUI mockup pages the screen was chosen from
 lab/                 the RandomX ↔ crystalline validation lab (see lab/README.md); lab/RandomX is a pinned submodule
+lab/crystalline-rx-formula/   R = F(K, H) rebuilt from crystalline primitives only; reproduces vector 1a (see its README)
 install.sh           writes the job file (plist) from wallet.local, rebuilds the dock app; starts nothing
 wallet.local(.example), com.minerv3.xmrig.plist(.example)   payout address + job file (the real ones are gitignored)
 vendor/              local xmrig source checkout (gitignored); XMR-Miner-Portable.zip, bin/xmrig.* extras (gitignored)
