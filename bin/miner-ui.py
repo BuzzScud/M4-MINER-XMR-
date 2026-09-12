@@ -72,19 +72,23 @@ class Cmd:
     name: str
     desc: str
     action: str
+    group: str = "miner"
 
 
 COMMANDS = (
-    Cmd("/usage", "Show status, speed, shares, pool, and machine", "usage"),
-    Cmd("/config", "Show threads, mode, pool, and worker from the job file", "config"),
-    Cmd("/logs", "Tail the last 20 lines of xmrig.log", "logs"),
-    Cmd("/err", "Tail the last 20 lines of the error log", "err"),
-    Cmd("/open", "Open this folder in Finder", "open"),
-    Cmd("/bench", "Offline thread sweep (~10 min). Never starts mining", "bench"),
-    Cmd("/flex", "Toggle pool algo switch (off = rx/0 only)", "flex"),
-    Cmd("/help", "List commands", "help"),
-    Cmd("/quit", "Quit this UI (does not stop a running miner)", "quit"),
+    Cmd("/usage", "Status, speed, shares, pool", "usage", "miner"),
+    Cmd("/config", "Threads, mode, pool, worker", "config", "miner"),
+    Cmd("/logs", "Last 20 lines of xmrig.log", "logs", "miner"),
+    Cmd("/err", "Last 20 lines of the error log", "err", "miner"),
+    Cmd("/open", "Open this folder in Finder", "open", "actions"),
+    Cmd("/bench", "Offline thread sweep, ~10 min", "bench", "actions"),
+    Cmd("/flex", "Pool picks the algo (or rx/0)", "flex", "actions"),
+    Cmd("/help", "List commands", "help", "ui"),
+    Cmd("/quit", "Quit; the miner keeps running", "quit", "ui"),
 )
+GROUPS = ("miner", "actions", "ui")
+NOT_RECENT = {"help", "quit"}
+RECENT_N = 3
 
 ALIASES = {
     "/stats": "usage",
@@ -290,8 +294,32 @@ def save_session_snapshot(live: dict) -> None:
     try:
         os.makedirs(os.path.dirname(SNAP), exist_ok=True)
         tmp = SNAP + ".tmp"
+        snap = session_snapshot(live)
+        old = load_snapshot() or {}
+        if old.get("recent"):
+            snap["recent"] = old["recent"]
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(session_snapshot(live), f, indent=2)
+            json.dump(snap, f, indent=2)
+        os.replace(tmp, SNAP)
+    except Exception:
+        pass
+
+
+def load_recent() -> list[str]:
+    snap = load_snapshot() or {}
+    r = snap.get("recent") or []
+    return [a for a in r if isinstance(a, str)][:RECENT_N]
+
+
+def save_recent(actions: list[str]) -> None:
+    """Keep the recent list inside logs/last-session.json (the summary script ignores extra keys)."""
+    try:
+        snap = load_snapshot() or {}
+        snap["recent"] = actions[:RECENT_N]
+        os.makedirs(os.path.dirname(SNAP), exist_ok=True)
+        tmp = SNAP + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f, indent=2)
         os.replace(tmp, SNAP)
     except Exception:
         pass
@@ -586,6 +614,7 @@ class App:
     start_ts: Optional[float] = None
     ds_ready_s: Optional[float] = None
     frame_no: int = 0
+    recent: Optional[list] = None
     lw: int = 80  # width of the left pane (== cols when the rail is folded)
     hist: list = field(default_factory=list)  # 10 s hashrate, one sample per poll
     thr_cache: Optional[tuple] = None
@@ -613,12 +642,94 @@ class App:
         src = self.force_palette if self.force_palette is not None else self.buf
         return filter_cmds(src)
 
+    def palette_query(self) -> str:
+        return self.force_palette if self.force_palette is not None else self.buf
+
+    def recent_cmds(self) -> list[Cmd]:
+        if self.recent is None:
+            self.recent = [] if self.dump else load_recent()
+        by_action = {c.action: c for c in COMMANDS}
+        return [by_action[a] for a in self.recent if a in by_action]
+
+    def palette_lines(self, with_headers: bool = True) -> list[tuple]:
+        """Rows of the palette as ('h', title) headers and ('c', Cmd, ordinal) commands, in display order.
+        Bare '/' shows recent + the three groups; anything typed after it is a flat ranked filter."""
+        q = self.palette_query()
+        ms = filter_cmds(q)
+        lines: list[tuple] = []
+        n = 0
+        if q == "/":
+            rec = self.recent_cmds()
+            if rec and with_headers:
+                lines.append(("h", "recent"))
+            for c in rec:
+                n += 1
+                lines.append(("c", c, n))
+            for g in GROUPS:
+                cmds = [c for c in COMMANDS if c.group == g and c not in rec]
+                if not cmds:
+                    continue
+                if with_headers:
+                    lines.append(("h", g))
+                for c in cmds:
+                    n += 1
+                    lines.append(("c", c, n))
+        else:
+            for c in ms:
+                n += 1
+                lines.append(("c", c, n))
+        return lines
+
+    def visible_cmds(self) -> list[Cmd]:
+        return [ln[1] for ln in self.palette_lines(False) if ln[0] == "c"]
+
     def selected(self) -> Optional[Cmd]:
-        ms = self.matches()
+        ms = self.visible_cmds()
         if not ms:
             return None
         i = max(0, min(self.sel, len(ms) - 1))
         return ms[i]
+
+    def note_recent(self, action: str) -> None:
+        if action in NOT_RECENT:
+            return
+        rec = [a for a in (self.recent or []) if a != action]
+        self.recent = [action] + rec
+        self.recent = self.recent[:RECENT_N]
+        if not self.dump:
+            save_recent(self.recent)
+
+    def cmd_status(self, c: Cmd, live: dict, compact: bool = False) -> str:
+        """What the command would find right now — so often you need not open it."""
+        state = live["state"]
+        run = state == "RUNNING"
+        a = c.action
+        if a == "usage":
+            if run:
+                return f"{fmt_hs(live['hs'])} · {fmt_n(live['acc'])} ✓" + ("" if compact else f" · {fmt_uptime(live['up'])}")
+            return "building dataset" if state == "STARTING" else "not mining"
+        if a == "config":
+            j = live["job"]
+            return f"{j.get('algo', '-')} {j.get('mode', '-')} · {j.get('threads', '-')} threads"
+        if a in ("logs", "err"):
+            path = LOG if a == "logs" else ERR
+            tail = read_tail(path, 20)
+            if not tail:
+                return "empty"
+            last = tail[-1]
+            m = _LOG_TS.match(last)
+            when = f"{m.group(4)}:{m.group(5)}:{m.group(6)} " if m else ""
+            what = (m.group(9).strip() if m else last).split(" ")[0]
+            return f"{len(tail)} lines · {when.strip()}" if compact else f"{len(tail)} lines · last {when}{what}"
+        if a == "open":
+            return short_path(ROOT, 24 if compact else 28)
+        if a == "bench":
+            return "running · will refuse" if state != "STOPPED" else "~10 min · mines nothing"
+        if a == "flex":
+            return "on · pool picks the algo" if os.path.isfile(os.path.join(ROOT, "flex.on")) else "off · rx/0 only"
+        if a == "quit":
+            return "xmrig keeps running" if state != "STOPPED" else ""
+        return ""
 
     def live(self) -> dict:
         if self.fixed_live is not None:
@@ -1140,20 +1251,44 @@ class App:
         ]
         return rows
 
-    def palette_rows(self, ms: list[Cmd], n: int) -> list[str]:
-        if not ms:
+    def palette_rows(self, live: dict, n: int) -> list[str]:
+        """Grouped list with a selected band, digit shortcuts, typed-prefix highlight and a live status column.
+        Headers go first when there is no room; then the command list scrolls."""
+        lines = self.palette_lines(True)
+        if len(lines) > n:
+            lines = self.palette_lines(False)
+        cmds = [ln for ln in lines if ln[0] == "c"]
+        if not cmds:
             return [self.r(f"  {SEC}no matching commands{INK}")]
-        sel = max(0, min(self.sel, len(ms) - 1))
-        start = 0
-        if len(ms) > n:
-            start = min(max(0, sel - n + 1), len(ms) - n)
+        sel = max(0, min(self.sel, len(cmds) - 1))
+        if len(lines) > n:  # scroll a window of the flat list around the selection
+            start = min(max(0, sel - n + 1), len(lines) - n)
+            lines = lines[start : start + n]
+        q = self.palette_query()[1:].lower()
+        W = self.lw
+        status_w = 30 if W >= 100 else (24 if W >= 72 else 0)
         out = []
-        for i, c in enumerate(ms[start : start + n]):
-            on = start + i == sel
-            mark = f"{CYAN}› " if on else "  "
-            name = f"{CYAN}{BOLD}{c.name:<12}{NOBOLD}" if on else f"{SEC}{c.name:<12}"
-            desc = f"{INK}{c.desc}" if on else f"{FAINT}{c.desc}"
-            out.append(self.r(f"{mark}{name}{desc}{INK}"))
+        for ln in lines:
+            if ln[0] == "h":
+                out.append(self.r(f" {FAINT}{ln[1]}{INK}"))
+                continue
+            c, ordinal = ln[1], ln[2]
+            on = c is cmds[sel][1]
+            digit = f"{ordinal}" if ordinal <= 9 else " "
+            # name with the typed prefix in bold
+            nm = c.name
+            if q and nm[1:].lower().startswith(q):
+                name = f"{BOLD}{nm[:1 + len(q)]}{NOBOLD}{nm[1 + len(q):]}"
+            else:
+                name = nm
+            name_pad = " " * max(0, 10 - len(nm))
+            status = self.cmd_status(c, live, compact=W < 100) if status_w else ""
+            desc_w = max(8, W - 16 - (status_w + 2 if status else 0))
+            left = f"{'▎' if on else ' '}{digit} {CYAN if on else SEC}{name}{name_pad}{INK if on else FAINT}  {trunc(c.desc, desc_w)}"
+            row = fit_row(left, f"{SEC}{trunc(status, status_w)}{INK}" if status else "", W)
+            if on:
+                row = BAND_BG + CYAN + row + RESET  # the ▎ picks up the accent; the row gets the band ground
+            out.append(row)
         return out
 
     def status_row(self, live: dict) -> Optional[str]:
@@ -1190,7 +1325,16 @@ class App:
         vis = text if len(text) <= room else text[-room:]
         line = f" {SEC}› {INK}{vis}" if vis else f" {SEC}› {SEC}{trunc(ph, room)}{INK}"
         self.cursor = (y0 + 1, 3 + len(vis))
-        return [self.band(""), self.band(line), self.band("")]
+        top = ""
+        if self.mode == "home" and self.force_palette is None and self.buf.startswith("/"):
+            cmds = self.visible_cmds()
+            sel = max(0, min(self.sel, len(cmds) - 1)) + 1 if cmds else 0
+            top = fit_row(f" {FAINT}{sel} of {len(cmds)}{INK}" if cmds else f" {FAINT}0 of 0{INK}",
+                          f"{FAINT}↑↓ move · 1–9 run · tab complete · ↵ run · esc close{INK} ", self.lw)
+        elif self.force_palette is not None:
+            cmds = self.visible_cmds()
+            top = fit_row(f" {FAINT}1 of {len(cmds)}{INK}", f"{FAINT}↑↓ move · 1–9 run · tab complete · ↵ run · esc close{INK} ", self.lw)
+        return [self.band(top), self.band(line), self.band("")]
 
     def footer_row(self, live: dict) -> str:
         state = live["state"]
@@ -1228,7 +1372,11 @@ class App:
         ms = self.matches()
         pal = self.mode == "home" and (self.force_palette is not None or self.buf.startswith("/"))
         if pal:
-            pal_n = max(1, min(len(ms) or 1, 9, rows - top - 6))
+            avail = max(1, rows - top - 6)
+            want = len(self.palette_lines(True))
+            if want > avail:
+                want = len(self.palette_lines(False))
+            pal_n = max(1, min(want or 1, 12, avail))
         status = self.status_row(live) if (self.mode == "home" and not pal) else None
         if self.mode == "confirm":
             status = self.r(f"{SEC}• {INK}Offline sweep{SEC} · ~10 minutes · mines nothing · refuses if the miner is running · type yes{INK}")
@@ -1246,7 +1394,7 @@ class App:
         if status:
             out.append(status)
         if pal:
-            out += self.palette_rows(ms, pal_n)
+            out += self.palette_rows(live, pal_n)
         out += self.band_rows(live, len(out))
         if len(out) > rows - 1:
             out = out[-(rows - 1):]
@@ -1476,7 +1624,7 @@ class App:
         return ch if ch.isprintable() else None
 
     def on_key_home(self, key: str) -> bool:
-        ms = self.matches()
+        ms = self.visible_cmds() if self.buf.startswith("/") else []
         if key == "quit":
             return False
         if key == "esc":
@@ -1519,11 +1667,20 @@ class App:
             if not text:
                 return True
             if action:
+                self.note_recent(action)
                 return self.run_action(action)
             self.add("user", text=text)
             self.say("Unknown command. Type / for the list.")
             return True
         if key and len(key) == 1:
+            if self.buf.startswith("/") and key.isdigit() and key != "0":
+                i = int(key) - 1
+                if i < len(ms):
+                    self.buf = ""
+                    self.sel = 0
+                    self.note_recent(ms[i].action)
+                    return self.run_action(ms[i].action)
+                return True
             self.buf += key
             self.sel = 0
         return True
@@ -1770,7 +1927,20 @@ def self_test() -> int:
     stopped = dump_frame("home-stopped", strip=True)
     check("stopped: summary + placeholder", "• Stopped after 16h 8m" in stopped and "Wrote ~/Desktop/XMR-miner-summary" in stopped and "s to mine" in stopped and "not mining" in stopped and "Mining (" not in stopped)
     pal = dump_frame("slash", strip=True)
-    check("palette rows", "› /usage" in pal and "/quit" in pal and "Type / for" not in pal)
+    check("palette groups + digits + status", " miner" in pal and " actions" in pal and " ui" in pal and "▎1 /usage" in pal and " 9 /quit" in pal
+          and "4,178 H/s · 1,945 ✓" in pal and "off · rx/0 only" in pal and "running · will refuse" in pal and "Type / for" not in pal)
+    check("palette hints row", "1 of 9" in pal and "1–9 run" in pal)
+    pal2 = dump_frame("palette", strip=True)
+    pal_rows = [ln for ln in pal2.split("\n") if "/usage" in ln or ln.strip() in ("miner", "actions", "ui", "recent")]
+    check("palette filter is flat + selected", not any(ln.strip() in ("miner", "actions", "ui") for ln in pal2.split("\n")) and "▎1 /usage" in pal2 and "1 of 1" in pal2)
+    small = dump_frame("slash", 60, 18, strip=True)
+    check("palette drops headers when short", not any(ln.strip() == "actions" for ln in small.split("\n")) and "/usage" in small)
+    appf = demo_app("home"); appf.force_palette = None; appf.buf = "/lo"
+    flt = plain("\n".join(appf.compose(appf.live())))
+    check("typed prefix filters to /logs first", "▎1 /logs" in flt and "/usage" not in flt.split("▎1 /logs")[1].split("›")[0])
+    app = demo_app("home"); app.buf = "/"; app.recent = ["logs", "flex"]
+    check("recent group first", [ln[1].action for ln in app.palette_lines(True) if ln[0] == "c"][:2] == ["logs", "flex"] and app.palette_lines(True)[0] == ("h", "recent"))
+    app.on_key_home("3"); check("digit runs the 3rd visible command (/usage)", app.mode == "overlay" and app.tab == TABS.index("Usage") and app.buf == "")
     usage = dump_frame("usage", strip=True)
     check("usage card", "› /usage" in usage and "XMR Miner · usage" in usage and "Hashrate:" in usage and "[" in usage and "Windows:" in usage and "Cadence:" in usage and "Uptime:      16h 08m 00s" in usage)
     config = dump_frame("config", strip=True)

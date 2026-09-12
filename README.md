@@ -61,14 +61,16 @@ and marks the latency column `~` (it is the pool ping at that moment).
 s            start (immediate)
 t            stop (writes a summary txt to Desktop)
 q / ⌃C       quit UI (does not stop a running miner)
-/            command palette (filter as you type, ↑↓ pick, tab complete, ↵ run)
+/            command palette: grouped (recent · miner · actions · ui), ↑↓ pick, 1–9 run,
+             tab complete, ↵ run, esc close; each row shows what it would find right now
 /usage       card: hashrate, windows, shares, cadence, threads, dataset, pool, machine, uptime
 /config      card: threads, mode, pool, worker, flex, job file
 /logs        tail -n 20 of xmrig.log (e switches to the error log)
 /err         tail -n 20 of xmrig.err.log
 /open        this folder in Finder
-/bench       thread sweep (offline, never starts mining; asks for "yes")
+/bench       thread sweep (offline, never starts mining; asks for "yes"; refuses while mining)
 /flex        pool algo switch (off = rx/0). does not start mining.
+             the last 3 commands used are remembered in logs/last-session.json (not /help, /quit)
 /help        command list
 esc          close palette / card
 ```
