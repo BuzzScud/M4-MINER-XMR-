@@ -93,3 +93,10 @@ Starts nothing. Confirm Threads: 10.
 - Same 13 RandomX steps — do not rewrite them.
 - macOS has no 1 GB hugepages. Keep ~3 GiB free so the 2 GB dataset is not compressed.
 - If H/s drops, check compressor / a second miner, not the hash.
+
+## Lab and design pages
+
+- `lab/` — the RandomX ↔ crystalline validation lab (see `lab/README.md`): the crystalline abacus as the arithmetic engine under
+  test against tevador's reference (`lab/RandomX`, a pinned submodule; `git submodule update --init`), the ALU + self-test,
+  the hook script that routes every RandomX op through it, the traces for all six official vectors, and the formula-lab page.
+- `docs/designs/` — the interactive TUI mockup pages the screen was chosen from.

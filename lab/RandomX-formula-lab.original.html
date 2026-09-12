@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RandomX formula lab</title>
+<style>
+  :root {
+    --bg:#0d0e11; --card:#14151a; --sunk:#0e0f14; --line:rgba(240,238,230,.10);
+    --ink:#f0eee6; --muted:#84837c; --gold:#d9a441; --teal:#26c6c0; --green:#2fbf85; --pink:#d55181;
+    --mono: ui-monospace, "IBM Plex Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 13px var(--mono); overflow: hidden; }
+  .app { display: grid; grid-template-columns: 300px 1fr; grid-template-rows: 44px 1fr; height: 100%; }
+  .top {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+    padding: 0 14px; border-bottom: 1px solid var(--line); background: #111216;
+  }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  .info { position: relative; display: inline-flex; align-items: center; }
+  .info > button {
+    width: 20px; height: 20px; padding: 0; border-radius: 50%;
+    font: 11px var(--mono); color: var(--muted); line-height: 20px;
+  }
+  .info > button:hover, .info:focus-within > button { color: var(--gold); border-color: var(--gold); }
+  .tip {
+    display: none; position: absolute; left: 0; top: calc(100% + 8px); z-index: 20;
+    width: min(420px, 70vw); padding: 10px 12px; border-radius: 8px;
+    background: #1a1c22; border: 1px solid var(--line); color: var(--ink);
+    font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  }
+  .info:hover .tip, .info:focus-within .tip { display: block; }
+  .rail { overflow: auto; border-right: 1px solid var(--line); padding: 8px 8px 16px; }
+  .lab { overflow: auto; padding: 14px 18px 32px; }
+  .lede { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 6px 0 10px; }
+  .step {
+    display: grid; grid-template-columns: 1.8em 1fr; gap: 6px; padding: 3px 8px;
+    border-radius: 5px; color: var(--muted); cursor: pointer; line-height: 1.3; font-size: 12px;
+  }
+  .step:hover { background: #181a20; color: var(--ink); }
+  .step.on { background: #2a2416; color: var(--gold); }
+  .step .n { color: inherit; }
+  .phase { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 8px 6px 3px; }
+  .spec {
+    background: var(--sunk); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; white-space: pre-wrap; color: var(--gold); font-size: 12px; line-height: 1.5;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
+  button {
+    background: #181a20; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 6px 11px; cursor: pointer; font: 12px var(--mono);
+  }
+  button:hover { background: #1e2028; }
+  button.ok { background: #14332a; color: #7de0b8; }
+  textarea, input[type=text] {
+    width: 100%; background: var(--sunk); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; font: 13px var(--mono);
+  }
+  textarea { min-height: 72px; resize: vertical; }
+  .verdict { min-height: 1.4em; margin: 8px 0; }
+  .verdict.pass { color: var(--green); }
+  .verdict.fail { color: var(--pink); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; }
+  .k { color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+  .v { font-variant-numeric: tabular-nums; word-break: break-all; }
+  .regs { display: grid; grid-template-columns: 2em 1fr 2em 1fr; gap: 2px 8px; font-size: 11px; }
+  .hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
+  .v1a-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+  .badge { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .badge.diff { color: var(--pink); border-color: var(--pink); }
+  .badge.same { color: var(--green); border-color: var(--green); }
+  .hexrow { display: grid; grid-template-columns: 7.2em 1fr; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line); }
+  .hexrow .k { padding-top: 4px; }
+  .hex {
+    display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 13px; font-variant-numeric: tabular-nums;
+    letter-spacing: .04em; color: var(--ink);
+  }
+  .hex span { background: var(--sunk); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+  .hex.official span { color: var(--teal); }
+  .hex.lab span { color: var(--ink); }
+  .hex span.hit { color: var(--green); border-color: var(--green); }
+  .hex span.miss { color: var(--pink); border-color: rgba(213,81,129,.45); }
+  @media (max-width: 820px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: 44px 32vh 1fr; }
+    .rail { border-right: 0; border-bottom: 1px solid var(--line); }
+    .tip { left: auto; right: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <h1>RandomX formula lab</h1>
+    <div class="info">
+      <button type="button" aria-label="About this page" aria-describedby="labtip">i</button>
+      <div class="tip" id="labtip" role="tooltip">
+        Left = the recipe. Right = type a formula. Green = same value as this step’s spec result.<br><br>
+        Vector 1a is the official 32-byte R for the K, H below. This page’s fold is Blake2b of these registers. It equals 1a only when AES, Argon2d, and the full dataset are the spec ones.
+      </div>
+    </div>
+  </div>
+  <aside class="rail">
+    <div id="steps"></div>
+  </aside>
+  <main class="lab">
+    <div class="k" id="stitle">step</div>
+    <p class="lede" id="swhy"></p>
+    <div class="spec" id="sspec"></div>
+    <div class="row">
+      <button id="run">run spec step</button>
+      <button id="check" class="ok">check formula</button>
+      <button id="prev">prev</button>
+      <button id="next">next</button>
+    </div>
+    <div class="k">your formula (JS)</div>
+    <textarea id="expr" placeholder="xor(r0, loadD64(item))   or   blake2b512(H)"></textarea>
+    <p class="hint">Names: r0…r7, r[], ma mx mt ic spAddr0 spAddr1 item nonce K H difficulty T
+      · xor and64 add64 mul64 lo32 hi32 u64 · loadP64(addr) loadD64(item) · blake2b256(x) blake2b512(x)
+      · hex(x) eq(a,b)</p>
+    <div class="verdict" id="verdict">—</div>
+    <div class="grid2">
+      <div class="card">
+        <div class="k">spec result this step</div>
+        <div class="v" id="expect">—</div>
+      </div>
+      <div class="card">
+        <div class="k">your result</div>
+        <div class="v" id="got">—</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="k">machine</div>
+      <div class="regs" id="regs"></div>
+    </div>
+    <div class="card">
+      <div class="v1a-head">
+        <div>
+          <div class="k">Vector 1a · pool target</div>
+          <p class="hint" style="margin:4px 0 0">K = "test key 000"&ensp;·&ensp;H = "This is a test"&ensp;·&ensp;tevador tests.cpp</p>
+        </div>
+        <span class="badge diff" id="v1abadge">lab ≠ official</span>
+      </div>
+      <div class="hexrow">
+        <div class="k">official</div>
+        <div class="hex official" id="v1a"></div>
+      </div>
+      <div class="hexrow">
+        <div class="k">this page</div>
+        <div class="hex lab" id="labR"></div>
+      </div>
+      <div class="hexrow">
+        <div class="k">your paste</div>
+        <div>
+          <input id="v1ain" type="text" placeholder="paste official hex to confirm the pool target"/>
+          <div class="verdict" id="v1averdict"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<script>
+(function () {
+  const u64 = (x) => BigInt.asUintN(64, typeof x === "bigint" ? x : BigInt(x));
+  const lo32 = (x) => Number(u64(x) & 0xFFFFFFFFn) >>> 0;
+  const hi32 = (x) => Number((u64(x) >> 32n) & 0xFFFFFFFFn) >>> 0;
+  const xor = (a, b) => u64(u64(a) ^ u64(b));
+  const and64 = (a, b) => u64(u64(a) & u64(b));
+  const add64 = (a, b) => u64(u64(a) + u64(b));
+  const mul64 = (a, b) => u64(u64(a) * u64(b));
+  function hex(x, n) {
+    if (x instanceof Uint8Array) return [...x].map(b => b.toString(16).padStart(2, "0")).join("");
+    if (typeof x === "bigint") return x.toString(16).padStart(n || 16, "0");
+    if (typeof x === "number") return (x >>> 0).toString(16).padStart(n || 8, "0");
+    return String(x);
+  }
+  function eq(a, b) {
+    if (a instanceof Uint8Array && b instanceof Uint8Array) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    }
+    if (typeof a === "bigint" || typeof b === "bigint") return u64(a) === u64(b);
+    if (typeof a === "string" || typeof b === "string")
+      return String(a).replace(/^0x/, "").toLowerCase() === String(b).replace(/^0x/, "").toLowerCase();
+    return a === b;
+  }
+
+  /* Blake2b (RFC 7693) — real. */
+  const IV = [
+    0x6a09e667f3bcc908n, 0xbb67ae8584caa73bn, 0x3c6ef372fe94f82bn, 0xa54ff53a5f1d36f1n,
+    0x510e527fade682d1n, 0x9b05688c2b3e6c1fn, 0x1f83d9abfb41bd6bn, 0x5be0cd19137e2179n
+  ];
+  const SIG = [
+    [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],[14,10,4,8,9,15,13,6,1,12,0,2,11,7,5,3],
+    [11,8,12,0,5,2,15,13,10,14,3,6,7,1,9,4],[7,9,3,1,13,12,11,14,2,6,5,10,4,0,15,8],
+    [9,0,5,7,2,4,10,15,14,1,11,12,6,8,3,13],[2,12,6,10,0,11,8,3,4,13,7,5,15,14,1,9],
+    [12,5,1,15,14,13,4,10,0,7,6,3,9,2,8,11],[13,11,7,14,12,1,3,9,5,0,15,4,8,6,2,10],
+    [6,15,14,9,11,3,0,8,12,2,13,7,1,4,10,5],[10,2,8,4,7,6,1,5,15,11,9,14,3,12,13,0],
+    [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],[14,10,4,8,9,15,13,6,1,12,0,2,11,7,5,3]
+  ];
+  const rotr64 = (x, n) => u64((x >> BigInt(n)) | (x << (64n - BigInt(n))));
+  function b2bG(v, a, b, c, d, x, y) {
+    v[a] = u64(v[a] + v[b] + x); v[d] = rotr64(v[d] ^ v[a], 32);
+    v[c] = u64(v[c] + v[d]);     v[b] = rotr64(v[b] ^ v[c], 24);
+    v[a] = u64(v[a] + v[b] + y); v[d] = rotr64(v[d] ^ v[a], 16);
+    v[c] = u64(v[c] + v[d]);     v[b] = rotr64(v[b] ^ v[c], 63);
+  }
+  function blake2b(msg, outlen) {
+    const m = (typeof msg === "string") ? new TextEncoder().encode(msg)
+      : (msg instanceof Uint8Array ? msg : new Uint8Array(msg));
+    const h = IV.slice();
+    h[0] ^= 0x01010000n ^ BigInt(outlen);
+    let t0 = 0n, t1 = 0n;
+    const block = new Uint8Array(128);
+    let i = 0;
+    function compress(last) {
+      const v = h.concat(IV);
+      v[12] ^= t0; v[13] ^= t1;
+      if (last) v[14] = u64(~v[14]);
+      const m64 = [];
+      const dv = new DataView(block.buffer);
+      for (let j = 0; j < 16; j++) m64[j] = dv.getBigUint64(j * 8, true);
+      for (let r = 0; r < 12; r++) {
+        const s = SIG[r];
+        b2bG(v,0,4,8,12, m64[s[0]], m64[s[1]]);
+        b2bG(v,1,5,9,13, m64[s[2]], m64[s[3]]);
+        b2bG(v,2,6,10,14,m64[s[4]], m64[s[5]]);
+        b2bG(v,3,7,11,15,m64[s[6]], m64[s[7]]);
+        b2bG(v,0,5,10,15,m64[s[8]], m64[s[9]]);
+        b2bG(v,1,6,11,12,m64[s[10]],m64[s[11]]);
+        b2bG(v,2,7,8,13, m64[s[12]],m64[s[13]]);
+        b2bG(v,3,4,9,14, m64[s[14]],m64[s[15]]);
+      }
+      for (let j = 0; j < 8; j++) h[j] ^= v[j] ^ v[j + 8];
+    }
+    while (i + 128 <= m.length) {
+      block.set(m.subarray(i, i + 128));
+      t0 = u64(t0 + 128n); if (t0 < 128n) t1 = u64(t1 + 1n);
+      compress(false); i += 128;
+    }
+    block.fill(0); block.set(m.subarray(i));
+    const n = BigInt(m.length - i);
+    t0 = u64(t0 + n); if (t0 < n) t1 = u64(t1 + 1n);
+    compress(true);
+    const out = new Uint8Array(outlen);
+    const o = new DataView(out.buffer);
+    for (let j = 0; j < outlen; j += 8) o.setBigUint64(j, h[j / 8], true);
+    return out;
+  }
+  const blake2b256 = (x) => blake2b(x, 32);
+  const blake2b512 = (x) => blake2b(x, 64);
+
+  const V1A = "639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f";
+  const MASK_L3_64 = (2097152 - 1) & ~63;
+  const N_DS = 96, SP = 2097152, MUL0 = 6364136223846793005n;
+  const SS = [9298411001130361340n,12065312585734608966n,9306329213124626780n,5281919268842080866n,10536153434571861004n,3398623926847679864n,9549104520008361294n];
+
+  const sp = new DataView(new ArrayBuffer(SP));
+  const ds = new DataView(new ArrayBuffer(N_DS * 64));
+  const VM = {
+    r: Array(8).fill(0n),
+    ma: 0, mx: 0, mt: 0, ic: 2048, spAddr0: 0, spAddr1: 0,
+    readReg: [0, 2, 4, 6], datasetOffset: 0, item: 0
+  };
+  const JOB = { K: "test key 000", H: "This is a test", nonce: 0, difficulty: 48n };
+
+  function seedDataset() {
+    for (let n = 0; n < N_DS; n++) {
+      let r0 = u64(BigInt(n + 1) * MUL0);
+      const regs = [r0];
+      for (let i = 0; i < 7; i++) regs.push(u64(r0 ^ SS[i]));
+      for (let i = 0; i < 8; i++) ds.setBigUint64(n * 64 + i * 8, regs[i], true);
+    }
+  }
+  function fillPad() {
+    const s = blake2b512(JOB.H);
+    for (let i = 0; i < SP; i += 64) {
+      for (let j = 0; j < 64; j++) sp.setUint8(i + j, s[j % 64] ^ ((i + j) & 255));
+    }
+  }
+  function loadP64(addr) { return sp.getBigUint64((addr >>> 0) & MASK_L3_64, true); }
+  function loadD64(item) { return ds.getBigUint64(((item % N_DS) * 64), true); }
+  function xorRFrom(view, addr) {
+    for (let i = 0; i < 8; i++) VM.r[i] = u64(VM.r[i] ^ view.getBigUint64(addr + i * 8, true));
+  }
+  seedDataset(); fillPad();
+  VM.ma = 64; VM.mx = 128; VM.spAddr0 = VM.mx; VM.spAddr1 = VM.ma;
+
+  const STEPS = [
+    { phase:"Pool", title:"Job · K, H, nonce, D",
+      spec:"K = key block hash\nH = header ‖ nonce\nD = share difficulty",
+      why:"Pool sends work. You do not pick K.",
+      hint:"K", expect:() => JOB.K },
+    { phase:"Slow clock", title:"Dataset item init (7.3)",
+      spec:"r0 = (n+1) * 6364136223846793005\nr1 = r0 XOR 9298411001130361340\n…  (96 items here; spec has ~33.6e6)",
+      why:"Book is read-only after this. Argon2d is stubbed here.",
+      hint:"mul64(1n + 1n, 6364136223846793005n)", expect:() => u64(2n * MUL0) },
+    { phase:"Fast clock", title:"S = Blake2b-512(H)",
+      spec:"S = Hash512(H)     // REAL blake2b on this page",
+      why:"This hash is real. AES fill after it is not.",
+      hint:"blake2b512(H)", expect:() => blake2b512(JOB.H) },
+    { phase:"Fast clock", title:"Fill notepad 2 MiB",
+      spec:"P = AesGenerator1R(S)   // STUB on this page\n|P| = 2,097,152",
+      why:"Wrong pad → wrong programs. Spec uses AES keys from Hash512(\"RandomX AesGenerator1R keys\").",
+      hint:"2097152", expect:() => SP },
+    { phase:"VM", title:"Program VM · ic ← 2048",
+      spec:"ic ← 2048\nspAddr0 ← mx\nspAddr1 ← ma\nr0…r7 ← 0",
+      why:"Each of 8 programs starts here.",
+      hint:"2048", expect:() => 2048 },
+    { phase:"4.6.2", title:"1  mix notepad addresses",
+      spec:"x = r[s0] XOR r[s1]\nspAddr0 ^= lo32(x)\nspAddr1 ^= hi32(x)",
+      why:"You do not pick the address.",
+      hint:"xor(spAddr0, lo32(xor(r[0], r[2])))",
+      run() {
+        const x = VM.r[VM.readReg[0]] ^ VM.r[VM.readReg[1]];
+        VM.spAddr0 ^= lo32(x); VM.spAddr1 ^= hi32(x);
+      },
+      expect:() => VM.spAddr0 >>> 0 },
+    { phase:"4.6.2", title:"2  r XOR= P[spAddr0] 64 B",
+      spec:"addr = spAddr0 AND 0x1FFFC0\nr0…r7 ^= P[addr .. addr+63]",
+      hint:"xor(r0, loadP64(spAddr0 & 0x1FFFC0))",
+      run() { xorRFrom(sp, VM.spAddr0 & MASK_L3_64); },
+      expect:() => VM.r[0] },
+    { phase:"4.6.2", title:"3  f,e ← P[spAddr1]",
+      spec:"f,e loaded as IEEE pairs from L3 notepad",
+      hint:"spAddr1 & 0x1FFFC0",
+      expect:() => (VM.spAddr1 & MASK_L3_64) >>> 0 },
+    { phase:"4.6.2", title:"4  execute 256 instructions",
+      spec:"256 ops from tables 5.2–5.5. Not one formula.",
+      why:"Skipping ops → different R.",
+      hint:"256", expect:() => 256 },
+    { phase:"4.6.2", title:"5  mt ← ma · mx XOR= …",
+      spec:"mt ← ma\nmx ^= lo32(r[s2] XOR r[s3])",
+      hint:"ma",
+      run() {
+        VM.mt = VM.ma;
+        VM.mx ^= lo32(VM.r[VM.readReg[2]] ^ VM.r[VM.readReg[3]]);
+      },
+      expect:() => VM.mt >>> 0 },
+    { phase:"4.6.2", title:"6  prefetch D[offset+mx]",
+      spec:"prefetch only. Does not change R.",
+      hint:"0", expect:() => 0 },
+    { phase:"4.6.2", title:"7  r XOR= D[item] 64 B",
+      spec:"addr = datasetOffset + (mt mod |D|)\nr0…r7 ^= D[addr .. addr+63]",
+      why:"Wrong item → wrong R. This is the gold pen.",
+      hint:"xor(r0, loadD64(item))",
+      run() {
+        VM.item = ((VM.datasetOffset + (VM.mt % (N_DS * 64))) >>> 6) % N_DS;
+        xorRFrom(ds, VM.item * 64);
+        const t = VM.mx; VM.mx = VM.ma; VM.ma = t;
+      },
+      expect:() => VM.r[0] },
+    { phase:"4.6.2", title:"8  swap(mx, ma)",
+      spec:"(mx, ma) ← (ma, mx)   // done at end of step 7 here",
+      hint:"ma", expect:() => VM.ma >>> 0 },
+    { phase:"4.6.2", title:"9  P[spAddr1] ← r",
+      spec:"write 64 B integers back to notepad",
+      hint:"spAddr1 & 0x1FFFC0",
+      run() {
+        const a = VM.spAddr1 & MASK_L3_64;
+        for (let i = 0; i < 8; i++) sp.setBigUint64(a + i * 8, VM.r[i], true);
+      },
+      expect:() => (VM.spAddr1 & MASK_L3_64) >>> 0 },
+    { phase:"4.6.2", title:"10  f ← f XOR e  (v1)",
+      spec:"XOR of bits, not a float add. Monero is v1.",
+      hint:"1", expect:() => 1 },
+    { phase:"4.6.2", title:"11  P[spAddr0] ← f",
+      spec:"write floats to notepad",
+      hint:"spAddr0 & 0x1FFFC0", expect:() => (VM.spAddr0 & MASK_L3_64) >>> 0 },
+    { phase:"4.6.2", title:"12  spAddr ← 0",
+      spec:"spAddr0 ← 0; spAddr1 ← 0",
+      hint:"0",
+      run() { VM.spAddr0 = 0; VM.spAddr1 = 0; },
+      expect:() => VM.spAddr0 },
+    { phase:"4.6.2", title:"13  ic ← ic − 1",
+      spec:"if ic > 0: go to step 1",
+      hint:"ic - 1",
+      run() { VM.ic--; },
+      expect:() => VM.ic },
+    { phase:"Chain", title:"8 programs, then fold",
+      spec:"repeat program+2048 laps, 8 times\nlast program skips Hash512 reseed",
+      hint:"8", expect:() => 8 },
+    { phase:"Fold", title:"R = Blake2b-256(register file)",
+      spec:"A = AesHash1R(P)     // STUB on this page\nR = Hash256(RegisterFile)  // Blake2b of r0…r7 on this page",
+      why:"The pool checks spec R (vector 1a). Match that hex, or the share is rejected.",
+      hint:"blake2b256(regfile())",
+      expect:() => blake2b256(regfile()) },
+    { phase:"Lottery", title:"valid iff n < 2^256 / D",
+      spec:"n = LE256(R)\nT = floor(2^256 / D)\nvalid iff n < T",
+      hint:"difficulty", expect:() => JOB.difficulty },
+    { phase:"Pool", title:"Pool re-runs RandomX · accept / reject",
+      spec:"pool_R = RandomX(K, H)\naccept iff pool_R == your_R  and  n < T",
+      why:"1 accepted / 0 rejected on the M4 was this check.",
+      hint:"V1A", expect:() => V1A }
+  ];
+
+  function regfile() {
+    const b = new Uint8Array(64);
+    const dv = new DataView(b.buffer);
+    for (let i = 0; i < 8; i++) dv.setBigUint64(i * 8, VM.r[i], true);
+    return b;
+  }
+
+  function env() {
+    return {
+      r0: VM.r[0], r1: VM.r[1], r2: VM.r[2], r3: VM.r[3],
+      r4: VM.r[4], r5: VM.r[5], r6: VM.r[6], r7: VM.r[7],
+      r: VM.r.slice(), ma: VM.ma, mx: VM.mx, mt: VM.mt, ic: VM.ic,
+      spAddr0: VM.spAddr0, spAddr1: VM.spAddr1, item: VM.item,
+      nonce: JOB.nonce, K: JOB.K, H: JOB.H, difficulty: JOB.difficulty,
+      T: (1n << 256n) / JOB.difficulty, V1A, SP,
+      xor, and64, add64, mul64, lo32, hi32, u64, hex, eq,
+      loadP64, loadD64, blake2b256, blake2b512, regfile
+    };
+  }
+
+  function evalExpr(src) {
+    const e = env();
+    const keys = Object.keys(e);
+    const fn = new Function(...keys, "return (" + src + ")");
+    return fn(...keys.map(k => e[k]));
+  }
+
+  let cur = 0, lastExpect = null;
+  const $ = (id) => document.getElementById(id);
+
+  function paintSteps() {
+    const box = $("steps");
+    box.innerHTML = "";
+    let last = "";
+    STEPS.forEach((s, i) => {
+      if (s.phase !== last) {
+        const p = document.createElement("div");
+        p.className = "phase"; p.textContent = s.phase; box.appendChild(p);
+        last = s.phase;
+      }
+      const d = document.createElement("div");
+      d.className = "step" + (i === cur ? " on" : "");
+      d.innerHTML = "<span class='n'>" + (i + 1) + "</span><span>" + s.title + "</span>";
+      d.onclick = () => { cur = i; show(); };
+      box.appendChild(d);
+    });
+  }
+
+  function chunks(h) {
+    h = String(h).replace(/[^0-9a-f]/gi, "").toLowerCase();
+    const out = [];
+    for (let i = 0; i < h.length; i += 8) out.push(h.slice(i, i + 8));
+    return out;
+  }
+  function paintHex(el, h, vs) {
+    const a = chunks(h), b = vs ? chunks(vs) : null;
+    el.innerHTML = a.map((c, i) => {
+      const cls = b ? (c === b[i] ? " hit" : " miss") : "";
+      return "<span class='" + cls.trim() + "'>" + c + "</span>";
+    }).join("");
+  }
+  function showRegs() {
+    let h = "";
+    for (let i = 0; i < 8; i++)
+      h += "<span class='k'>r" + i + "</span><span class='v'>" + hex(VM.r[i]) + "</span>";
+    h += "<span class='k'>ma</span><span class='v'>" + hex(VM.ma) + "</span>";
+    h += "<span class='k'>mx</span><span class='v'>" + hex(VM.mx) + "</span>";
+    h += "<span class='k'>ic</span><span class='v'>" + VM.ic + "</span>";
+    h += "<span class='k'>item</span><span class='v'>" + VM.item + "</span>";
+    $("regs").innerHTML = h;
+    const lab = hex(blake2b256(regfile()));
+    paintHex($("v1a"), V1A);
+    paintHex($("labR"), lab, V1A);
+    const same = lab === V1A;
+    $("v1abadge").textContent = same ? "match · 1a" : "lab ≠ official";
+    $("v1abadge").className = "badge " + (same ? "same" : "diff");
+  }
+
+  function show() {
+    const s = STEPS[cur];
+    paintSteps();
+    $("stitle").textContent = (cur + 1) + " / " + STEPS.length + "  ·  " + s.title;
+    $("swhy").textContent = s.why || "";
+    $("sspec").textContent = s.spec;
+    $("expr").value = s.hint || "";
+    lastExpect = s.expect();
+    $("expect").textContent = fmt(lastExpect);
+    $("got").textContent = "—";
+    $("verdict").textContent = "run spec and/or check formula";
+    $("verdict").className = "verdict";
+    showRegs();
+  }
+
+  function fmt(x) {
+    if (x instanceof Uint8Array) return hex(x);
+    if (typeof x === "bigint") return "0x" + hex(x);
+    if (typeof x === "number") return String(x);
+    return String(x);
+  }
+
+  $("run").onclick = () => {
+    const s = STEPS[cur];
+    if (s.run) s.run();
+    lastExpect = s.expect();
+    $("expect").textContent = fmt(lastExpect);
+    showRegs();
+    $("verdict").textContent = "spec applied. now check your formula against that value.";
+    $("verdict").className = "verdict";
+  };
+  $("check").onclick = () => {
+    const src = $("expr").value.trim();
+    try {
+      const val = evalExpr(src);
+      $("got").textContent = fmt(val);
+      const ok = eq(val, lastExpect);
+      $("verdict").textContent = ok ? "match — same value as the spec for this step" : "different — not the spec result";
+      $("verdict").className = "verdict " + (ok ? "pass" : "fail");
+    } catch (err) {
+      $("got").textContent = String(err.message || err);
+      $("verdict").textContent = "could not evaluate";
+      $("verdict").className = "verdict fail";
+    }
+  };
+  $("prev").onclick = () => { cur = Math.max(0, cur - 1); show(); };
+  $("next").onclick = () => { cur = Math.min(STEPS.length - 1, cur + 1); show(); };
+  $("v1ain").addEventListener("input", () => {
+    const t = $("v1ain").value.replace(/[^0-9a-f]/gi, "").toLowerCase();
+    const ok = t === V1A;
+    $("v1averdict").textContent = t.length === 0 ? "" : (ok ? "that is official 1a — the pool target for those K, H" : "not 1a");
+    $("v1averdict").className = "verdict " + (ok ? "pass" : "fail");
+  });
+
+  show();
+})();
+</script>
+</body>
+</html>

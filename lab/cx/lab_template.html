@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RandomX formula lab</title>
+<style>
+  :root {
+    --bg:#0d0e11; --card:#14151a; --sunk:#0e0f14; --line:rgba(240,238,230,.10);
+    --ink:#f0eee6; --muted:#84837c; --gold:#d9a441; --teal:#26c6c0; --green:#2fbf85; --pink:#d55181;
+    --mono: ui-monospace, "IBM Plex Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 13px var(--mono); overflow: hidden; }
+  .app { display: grid; grid-template-columns: 300px 1fr; grid-template-rows: 44px 1fr; height: 100%; }
+  .top { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: #111216; flex-wrap: wrap; }
+  h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  .info { position: relative; display: inline-flex; align-items: center; }
+  .info > button { width: 20px; height: 20px; padding: 0; border-radius: 50%; font: 11px var(--mono); color: var(--muted); line-height: 20px; }
+  .info > button:hover, .info:focus-within > button { color: var(--gold); border-color: var(--gold); }
+  .tip { display: none; position: absolute; left: 0; top: calc(100% + 8px); z-index: 20; width: min(460px, 70vw); padding: 10px 12px; border-radius: 8px; background: #1a1c22; border: 1px solid var(--line); color: var(--ink); font-size: 12px; line-height: 1.5; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+  .info:hover .tip, .info:focus-within .tip { display: block; }
+  .sel { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+  select { background: #181a20; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: 12px var(--mono); }
+  .rail { overflow: auto; border-right: 1px solid var(--line); padding: 8px 8px 16px; }
+  .lab { overflow: auto; padding: 14px 18px 32px; }
+  .lede { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 6px 0 10px; }
+  .step { display: grid; grid-template-columns: 1.8em 1fr auto; gap: 6px; padding: 3px 8px; border-radius: 5px; color: var(--muted); cursor: pointer; line-height: 1.3; font-size: 12px; align-items: center; }
+  .step:hover { background: #181a20; color: var(--ink); }
+  .step.on { background: #2a2416; color: var(--gold); }
+  .step .n { color: inherit; }
+  .step .dot { width: 7px; height: 7px; border-radius: 50%; background: #333; }
+  .step .dot.ok { background: var(--green); } .step .dot.bad { background: var(--pink); } .step .dot.na { background: #3a3a3a; }
+  .phase { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 8px 6px 3px; }
+  .spec { background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; color: var(--gold); font-size: 12px; line-height: 1.5; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
+  button { background: #181a20; color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 6px 11px; cursor: pointer; font: 12px var(--mono); }
+  button:hover { background: #1e2028; }
+  button.ok { background: #14332a; color: #7de0b8; }
+  textarea, input[type=text] { width: 100%; background: var(--sunk); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 13px var(--mono); }
+  textarea { min-height: 72px; resize: vertical; }
+  .verdict { min-height: 1.4em; margin: 8px 0; }
+  .verdict.pass { color: var(--green); } .verdict.fail { color: var(--pink); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; }
+  .k { color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+  .v { font-variant-numeric: tabular-nums; word-break: break-all; }
+  .regs { display: grid; grid-template-columns: 3.2em 1fr 3.2em 1fr; gap: 2px 8px; font-size: 11px; }
+  .hint { color: var(--muted); font-size: 11px; line-height: 1.45; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+  .badge { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .badge.diff { color: var(--pink); border-color: var(--pink); }
+  .badge.same { color: var(--green); border-color: var(--green); }
+  .badge.gold { color: var(--gold); border-color: var(--gold); }
+  .hexrow { display: grid; grid-template-columns: 7.2em 1fr; gap: 10px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line); }
+  .hexrow .k { padding-top: 4px; }
+  .hex { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: .04em; color: var(--ink); }
+  .hex span { background: var(--sunk); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+  .hex.official span { color: var(--teal); }
+  .hex span.hit { color: var(--green); border-color: var(--green); }
+  .hex span.miss { color: var(--pink); border-color: rgba(213,81,129,.45); }
+  table { border-collapse: collapse; width: 100%; font-size: 11px; }
+  th, td { text-align: left; padding: 4px 6px; border-top: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--green); } .bad { color: var(--pink); } .dim { color: var(--muted); }
+  @media (max-width: 820px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto 32vh 1fr; }
+    .rail { border-right: 0; border-bottom: 1px solid var(--line); }
+    .grid2, .grid3 { grid-template-columns: 1fr; }
+    .tip { left: auto; right: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <h1>RandomX formula lab</h1>
+    <div class="info">
+      <button type="button" aria-label="About this page" aria-describedby="labtip">i</button>
+      <div class="tip" id="labtip" role="tooltip">
+        Left = the recipe, every step. Each step shows the value the native harness produced, and where the page can
+        recompute the step from the dumped inputs it does so and marks green/red.<br><br>
+        The harness is tevador's reference RandomX with <b>every</b> 64-bit, 32-bit and IEEE-double operation routed
+        through the crystalline abacus in strict mode: the abacus result is the one used, so a wrong bead anywhere
+        changes R and the official vector fails. Vector 1a–1e are the official test vectors from tests.cpp.
+      </div>
+    </div>
+    <span class="sel">vector <select id="selVec"></select></span>
+    <span class="sel">version <select id="selVer"></select></span>
+    <span class="sel">program <select id="selProg"></select></span>
+    <span class="sel">iteration <select id="selIter"></select></span>
+    <span class="badge" id="topbadge">—</span>
+  </div>
+  <aside class="rail"><div id="steps"></div></aside>
+  <main class="lab">
+    <div class="k" id="stitle">step</div>
+    <p class="lede" id="swhy"></p>
+    <div class="spec" id="sspec"></div>
+    <div class="row">
+      <button id="recompute" class="ok">recompute in page</button>
+      <button id="check">check formula</button>
+      <button id="prev">prev</button>
+      <button id="next">next</button>
+      <span class="hint" id="opsnote"></span>
+    </div>
+    <div class="k">your formula (JS)</div>
+    <textarea id="expr" placeholder="xor(r[0], r[2])"></textarea>
+    <p class="hint" id="envhint"></p>
+    <div class="verdict" id="verdict">—</div>
+    <div class="grid3">
+      <div class="card"><div class="k">harness value (crystalline strict)</div><div class="v" id="expect">—</div></div>
+      <div class="card"><div class="k">page recomputed</div><div class="v" id="recomp">—</div></div>
+      <div class="card"><div class="k">your result</div><div class="v" id="got">—</div></div>
+    </div>
+    <div class="card" id="detail"></div>
+    <div class="card">
+      <div class="k">machine (this iteration)</div>
+      <div class="regs" id="regs"></div>
+    </div>
+    <div class="card">
+      <div class="head">
+        <div>
+          <div class="k">Official vector · pool target</div>
+          <p class="hint" style="margin:4px 0 0" id="vecdesc"></p>
+        </div>
+        <span class="badge diff" id="v1abadge">—</span>
+      </div>
+      <div class="hexrow"><div class="k">official</div><div class="hex official" id="v1a"></div></div>
+      <div class="hexrow"><div class="k">harness R</div><div class="hex lab" id="labR"></div></div>
+      <div class="hexrow"><div class="k">page R</div><div class="hex lab" id="pageR"></div></div>
+    </div>
+  </main>
+</div>
+<script id="cxdata" type="application/json">/*__CX_DATA__*/</script>
+<script>
+(function () {
+  /* ------------------------------------------------------------------ utils */
+  const u64 = (x) => BigInt.asUintN(64, typeof x === "bigint" ? x : BigInt(x));
+  const lo32 = (x) => Number(u64(x) & 0xFFFFFFFFn) >>> 0;
+  const hi32 = (x) => Number((u64(x) >> 32n) & 0xFFFFFFFFn) >>> 0;
+  const xor = (a, b) => u64(u64(a) ^ u64(b));
+  const and64 = (a, b) => u64(u64(a) & u64(b));
+  const or64 = (a, b) => u64(u64(a) | u64(b));
+  const add64 = (a, b) => u64(u64(a) + u64(b));
+  const sub64 = (a, b) => u64(u64(a) - u64(b));
+  const mul64 = (a, b) => u64(u64(a) * u64(b));
+  const shl = (a, n) => u64(u64(a) << BigInt(n));
+  const shr = (a, n) => u64(u64(a) >> BigInt(n));
+  const big = (h) => BigInt("0x" + String(h).replace(/^0x/, ""));
+  const bytes = (h) => Uint8Array.from((String(h).replace(/^0x/, "").match(/../g) || []), (b) => parseInt(b, 16));
+  const hexb = (b) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  const le64 = (b, o) => { let v = 0n; for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(b[o + i]); return v; };
+  const le32 = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0;
+  const le32s = (b, o) => (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) | 0;
+  const u64le = (v) => { const b = new Uint8Array(8); let x = u64(v); for (let i = 0; i < 8; i++) { b[i] = Number(x & 0xFFn); x >>= 8n; } return b; };
+  const u32le = (v) => new Uint8Array([v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]);
+  const cat = (...arrs) => { const n = arrs.reduce((s, a) => s + a.length, 0); const o = new Uint8Array(n); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; };
+  const enc = (s) => new TextEncoder().encode(s);
+  const dv = new DataView(new ArrayBuffer(8));
+  const f64 = (bits) => { dv.setBigUint64(0, u64(bits), true); return dv.getFloat64(0, true); };
+  const bitsOf = (d) => { dv.setFloat64(0, d, true); return dv.getBigUint64(0, true); };
+  function hex(x, n) {
+    if (x instanceof Uint8Array) return hexb(x);
+    if (typeof x === "bigint") return x.toString(16).padStart(n || 16, "0");
+    if (typeof x === "number") return (x >>> 0).toString(16).padStart(n || 8, "0");
+    if (Array.isArray(x)) return "[" + x.map((e) => hex(e, n)).join(", ") + "]";
+    return String(x);
+  }
+  function eq(a, b) {
+    if (a instanceof Uint8Array && b instanceof Uint8Array) { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
+    if (Array.isArray(a) && Array.isArray(b)) { if (a.length !== b.length) return false; return a.every((e, i) => eq(e, b[i])); }
+    if (typeof a === "bigint" || typeof b === "bigint") { try { return u64(a) === u64(b); } catch (e) { return false; } }
+    if (typeof a === "string" || typeof b === "string") return String(a).replace(/^0x/, "").toLowerCase() === String(b).replace(/^0x/, "").toLowerCase();
+    return a === b;
+  }
+
+  /* --------------------------------------------------------- Blake2b (RFC 7693) */
+  const IV = [0x6a09e667f3bcc908n, 0xbb67ae8584caa73bn, 0x3c6ef372fe94f82bn, 0xa54ff53a5f1d36f1n, 0x510e527fade682d1n, 0x9b05688c2b3e6c1fn, 0x1f83d9abfb41bd6bn, 0x5be0cd19137e2179n];
+  const SIG = [[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],[14,10,4,8,9,15,13,6,1,12,0,2,11,7,5,3],[11,8,12,0,5,2,15,13,10,14,3,6,7,1,9,4],[7,9,3,1,13,12,11,14,2,6,5,10,4,0,15,8],[9,0,5,7,2,4,10,15,14,1,11,12,6,8,3,13],[2,12,6,10,0,11,8,3,4,13,7,5,15,14,1,9],[12,5,1,15,14,13,4,10,0,7,6,3,9,2,8,11],[13,11,7,14,12,1,3,9,5,0,15,4,8,6,2,10],[6,15,14,9,11,3,0,8,12,2,13,7,1,4,10,5],[10,2,8,4,7,6,1,5,15,11,9,14,3,12,13,0],[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15],[14,10,4,8,9,15,13,6,1,12,0,2,11,7,5,3]];
+  const rotr64 = (x, n) => u64((x >> BigInt(n)) | (x << (64n - BigInt(n))));
+  function G(v, a, b, c, d, x, y) {
+    v[a] = u64(v[a] + v[b] + x); v[d] = rotr64(v[d] ^ v[a], 32);
+    v[c] = u64(v[c] + v[d]);     v[b] = rotr64(v[b] ^ v[c], 24);
+    v[a] = u64(v[a] + v[b] + y); v[d] = rotr64(v[d] ^ v[a], 16);
+    v[c] = u64(v[c] + v[d]);     v[b] = rotr64(v[b] ^ v[c], 63);
+  }
+  function blake2b(msg, outlen) {
+    const m = (typeof msg === "string") ? enc(msg) : (msg instanceof Uint8Array ? msg : new Uint8Array(msg));
+    const h = IV.slice(); h[0] ^= 0x01010000n ^ BigInt(outlen);
+    let t0 = 0n, t1 = 0n; const block = new Uint8Array(128); let i = 0;
+    function compress(last) {
+      const v = h.concat(IV); v[12] ^= t0; v[13] ^= t1; if (last) v[14] = u64(~v[14]);
+      const m64 = []; const d = new DataView(block.buffer); for (let j = 0; j < 16; j++) m64[j] = d.getBigUint64(j * 8, true);
+      for (let r = 0; r < 12; r++) { const s = SIG[r];
+        G(v,0,4,8,12,m64[s[0]],m64[s[1]]); G(v,1,5,9,13,m64[s[2]],m64[s[3]]); G(v,2,6,10,14,m64[s[4]],m64[s[5]]); G(v,3,7,11,15,m64[s[6]],m64[s[7]]);
+        G(v,0,5,10,15,m64[s[8]],m64[s[9]]); G(v,1,6,11,12,m64[s[10]],m64[s[11]]); G(v,2,7,8,13,m64[s[12]],m64[s[13]]); G(v,3,4,9,14,m64[s[14]],m64[s[15]]); }
+      for (let j = 0; j < 8; j++) h[j] ^= v[j] ^ v[j + 8];
+    }
+    while (i + 128 < m.length) { block.set(m.subarray(i, i + 128)); t0 = u64(t0 + 128n); if (t0 < 128n) t1 = u64(t1 + 1n); compress(false); i += 128; }
+    block.fill(0); block.set(m.subarray(i)); const n = BigInt(m.length - i); t0 = u64(t0 + n); if (t0 < n) t1 = u64(t1 + 1n); compress(true);
+    const out = new Uint8Array(outlen); const o = new DataView(out.buffer); const tmp = new Uint8Array(64); const td = new DataView(tmp.buffer);
+    for (let j = 0; j < 8; j++) td.setBigUint64(j * 8, h[j], true); out.set(tmp.subarray(0, outlen)); void o; return out;
+  }
+  const blake2b256 = (x) => blake2b(x, 32);
+  const blake2b512 = (x) => blake2b(x, 64);
+
+  /* ------------------------------------------------------------- AES (soft) */
+  const AES = (() => {
+    const mul = (a, b) => { let r = 0; for (let i = 0; i < 8; i++) { if (b & 1) r ^= a; const hi = a & 0x80; a = (a << 1) & 0xff; if (hi) a ^= 0x1b; b >>= 1; } return r; };
+    const inv = (a) => { if (!a) return 0; let r = 1, p = a, e = 254; while (e) { if (e & 1) r = mul(r, p); p = mul(p, p); e >>= 1; } return r; };
+    const rotl8 = (x, n) => ((x << n) | (x >> (8 - n))) & 0xff;
+    const rotl32 = (x, n) => n ? (((x << n) | (x >>> (32 - n))) >>> 0) : x >>> 0;
+    const S = new Uint8Array(256), SI = new Uint8Array(256);
+    for (let x = 0; x < 256; x++) { const s = inv(x); S[x] = (s ^ rotl8(s, 1) ^ rotl8(s, 2) ^ rotl8(s, 3) ^ rotl8(s, 4) ^ 0x63) & 0xff; }
+    for (let x = 0; x < 256; x++) SI[S[x]] = x;
+    const Te = [0, 1, 2, 3].map(() => new Uint32Array(256)), Td = [0, 1, 2, 3].map(() => new Uint32Array(256));
+    for (let x = 0; x < 256; x++) {
+      const s = S[x], si = SI[x];
+      const te0 = (mul(s, 2) | (s << 8) | (s << 16) | (mul(s, 3) << 24)) >>> 0;
+      const td0 = (mul(si, 14) | (mul(si, 9) << 8) | (mul(si, 13) << 16) | (mul(si, 11) << 24)) >>> 0;
+      for (let k = 0; k < 4; k++) { Te[k][x] = rotl32(te0, 8 * k); Td[k][x] = rotl32(td0, 8 * k); }
+    }
+    const w = (b, o) => Uint32Array.from([0, 1, 2, 3], (j) => le32(b, o + 4 * j));
+    const wb = (ws) => { const b = new Uint8Array(16); for (let j = 0; j < 4; j++) b.set(u32le(ws[j]), 4 * j); return b; };
+    function encW(st, key) { const o = new Uint32Array(4); for (let j = 0; j < 4; j++) o[j] = (Te[0][st[j] & 255] ^ Te[1][(st[(j + 1) & 3] >>> 8) & 255] ^ Te[2][(st[(j + 2) & 3] >>> 16) & 255] ^ Te[3][st[(j + 3) & 3] >>> 24] ^ key[j]) >>> 0; return o; }
+    function decW(st, key) { const o = new Uint32Array(4); for (let j = 0; j < 4; j++) o[j] = (Td[0][st[j] & 255] ^ Td[1][(st[(j + 3) & 3] >>> 8) & 255] ^ Td[2][(st[(j + 2) & 3] >>> 16) & 255] ^ Td[3][st[(j + 1) & 3] >>> 24] ^ key[j]) >>> 0; return o; }
+    const K = (a) => Uint32Array.from(a);
+    /* keys as 32-bit words in memory order (lowest first) */
+    const GEN1R = [K([0x6daca553, 0x62716609, 0xdbb5552b, 0xb4f44917]), K([0x6d7caf07, 0x846a710d, 0x1725d378, 0x0da1dc4e]), K([0x3f1262f1, 0x9f947ec6, 0xf4c0794f, 0x3e20e345]), K([0x6aef8135, 0xb1ba317c, 0x16314c88, 0x49169154])];
+    const GEN4R = [K([0x6421aadd, 0xd1833ddb, 0x2f546d2b, 0x99e5d23f]), K([0xb20e3450, 0xb6913f55, 0x06f79d53, 0xa5dfcde5]), K([0x5c3ed904, 0x515e7baf, 0x0aa4679f, 0x171c02bf]), K([0x85623763, 0xe78f5d08, 0xcd673785, 0xd8ded291]),
+                   K([0xb5826f73, 0xe3d6a7a6, 0x3d518b6d, 0x229effb4]), K([0xc7566bf3, 0x9c10b3d9, 0xe9024d4e, 0xb272b7d2]), K([0xf273c9e7, 0xf765a38b, 0x2ba9660a, 0xf63befa7]), K([0x7a7cd609, 0x915839de, 0x0c06d1fd, 0xc0b0762d])];
+    const aesenc = (state16, key16) => wb(encW(w(state16, 0), key16 instanceof Uint32Array ? key16 : w(key16, 0)));
+    const aesdec = (state16, key16) => wb(decW(w(state16, 0), key16 instanceof Uint32Array ? key16 : w(key16, 0)));
+    /* AesGenerator1R(seed64) over n bytes: returns the first 64 output bytes and the generator's final state
+       (the reference writes that final state back into the seed buffer, and it becomes program 0's seed) */
+    const gen1R_cache = {};
+    function gen1R(seed, n) {
+      const key = hexb(seed) + ":" + n; if (gen1R_cache[key]) return gen1R_cache[key];
+      let s = [0, 1, 2, 3].map((i) => seed.slice(16 * i, 16 * i + 16)); let first64 = null;
+      for (let off = 0; off < n; off += 64) {
+        s = [aesdec(s[0], GEN1R[0]), aesenc(s[1], GEN1R[1]), aesdec(s[2], GEN1R[2]), aesenc(s[3], GEN1R[3])];
+        if (off === 0) first64 = cat(s[0], s[1], s[2], s[3]);
+      }
+      return (gen1R_cache[key] = { first64, finalState: cat(s[0], s[1], s[2], s[3]) });
+    }
+    function gen1R_first64(seed) { return gen1R(seed, 64).first64; }
+    /* first 64 bytes of AesGenerator4R(seed64) */
+    function gen4R_first64(seed) { let s0 = seed.subarray(0, 16), s1 = seed.subarray(16, 32), s2 = seed.subarray(32, 48), s3 = seed.subarray(48, 64);
+      for (let r = 0; r < 4; r++) { s0 = aesdec(s0, GEN4R[r]); s1 = aesenc(s1, GEN4R[r]); s2 = aesdec(s2, GEN4R[4 + r]); s3 = aesenc(s3, GEN4R[4 + r]); }
+      return cat(s0, s1, s2, s3); }
+    return { S, SI, Te, Td, aesenc, aesdec, gen1R, gen1R_first64, gen4R_first64 };
+  })();
+
+  /* ------------------------------------------------------------ constants */
+  const MASK_L3_64 = 0x1FFFC0n, CACHE_LINE_ALIGN = 0x7FFFFFC0n, DATASET_EXTRA_ITEMS = 524287n, CACHE_MIX_MASK = 0x3FFFFFn;
+  const MANT_MASK = (1n << 52n) - 1n, EXP_MASK = 0x7FFn, EXP_BIAS = 1023n, CONST_EXP = 0x300n, DYN_MANT_MASK = (1n << 56n) - 1n;
+  const MUL0 = 6364136223846793005n;
+  const SS = [9298411001130361340n, 12065312585734608966n, 9306329213124626780n, 5281919268842080866n, 10536153434571861004n, 3398623926847679864n, 9549104520008361294n];
+  const smallPositiveFloat = (e) => { let ex = shr(e, 59); const m = and64(e, MANT_MASK); ex = and64(add64(ex, EXP_BIAS), EXP_MASK); return or64(shl(ex, 52), m); };
+  const staticExponent = (e) => shl(or64(CONST_EXP, shl(shr(e, 60), 4)), 52);
+  const floatMask = (e) => or64(and64(e, (1n << 22n) - 1n), staticExponent(e));
+  const cvtI32Pair = (b, o) => [bitsOf(le32s(b, o)), bitsOf(le32s(b, o + 4))];
+  const argonH0 = (keyBytes) => blake2b(cat(u32le(1), u32le(0), u32le(262144), u32le(3), u32le(0x13), u32le(0), u32le(keyBytes.length), keyBytes, u32le(8), bytes("52616e646f6d5803"), u32le(0), u32le(0)), 64);
+  const argonBlockFirst64 = (keyBytes, blockIndex) => { const V1 = blake2b(cat(u32le(1024), argonH0(keyBytes), u32le(blockIndex), u32le(0)), 64); const V2 = blake2b(V1, 64); return cat(V1.subarray(0, 32), V2.subarray(0, 32)); };
+  const argonBlock0First64 = (keyBytes) => argonBlockFirst64(keyBytes, 0);
+
+  /* ---------------------------------------------------------------- data */
+  const DATA = JSON.parse(document.getElementById("cxdata").textContent);
+  const VECTORS = DATA.vectors;             // [{name, key, input, official:{v1,v2}, runs:{v1:{events}, v2:{events}}}]
+  function groupEvents(evs) {
+    const g = { programs: [], iters: [], program_end: [], chain: [], dataset_items: [] };
+    let p = -1;
+    for (const e of evs) {
+      if (e.ev === "program") { p++; g.programs[p] = e; g.iters[p] = []; }
+      else if (e.ev === "iter") g.iters[p].push(e);
+      else if (e.ev === "program_end") g.program_end[e.program] = e;
+      else if (e.ev === "chain") g.chain[e.program] = e;
+      else if (e.ev === "dataset_item") g.dataset_items.push(e);
+      else g[e.ev] = e;
+    }
+    return g;
+  }
+  for (const v of VECTORS) for (const k of Object.keys(v.runs)) if (Array.isArray(v.runs[k])) v.runs[k] = groupEvents(v.runs[k]);
+
+  let cur = { vec: 0, ver: "v1", prog: 0, iter: 0, step: 0 };
+  const $ = (id) => document.getElementById(id);
+  const vec = () => VECTORS[cur.vec];
+  const run = () => vec().runs[cur.ver];
+  const full = () => run() && run().programs && run().programs.length > 0;
+  const P = () => full() ? run().programs[cur.prog] : null;
+  const I = () => full() ? run().iters[cur.prog][cur.iter] : null;
+  const Inext = () => full() ? run().iters[cur.prog][cur.iter + 1] : null;
+  const vecBytes = (v) => v.input.startsWith("0x") ? bytes(v.input) : enc(v.input);
+  const keyBytes = (v) => v.key.startsWith("0x") ? bytes(v.key) : enc(v.key);
+  const arr64 = (a) => a.map(big);
+  const vecs = (a) => a.map((p) => [big(p[0]), big(p[1])]);
+
+  /* --------------------------------------------------------------- steps */
+  /* each step: phase, title, spec(), why, hint, expect() -> harness value, recompute() -> page value (or null), env() extras, regs: which stage */
+  const STEPS = [
+    { phase: "Pool", title: "Job · K, H, official R", regs: "before",
+      spec: () => `K = "${vec().key}"\nH = ${vec().input.length > 60 ? vec().input.slice(0, 60) + "…" : vec().input}\nofficial R (${cur.ver}) = ${vec().official[cur.ver] || "—"}`,
+      why: "Pool sends work. You do not pick K. The official R comes from tevador's tests.cpp.",
+      hint: "official", expect: () => vec().official[cur.ver] || "", env: () => ({ official: vec().official[cur.ver] || "" }) },
+    { phase: "Slow clock", title: "Argon2d cache from K (§7.1)", regs: "before",
+      spec: () => `H0 = Blake2b-64(LE32(lanes=1) ‖ LE32(0) ‖ LE32(262144) ‖ LE32(3) ‖ LE32(0x13) ‖ LE32(0) ‖ LE32(|K|) ‖ K ‖ LE32(8) ‖ "RandomX\\x03" ‖ LE32(0) ‖ LE32(0))\nblock[0] = H'(1024, H0 ‖ LE32(0) ‖ LE32(0))     block[1] = H'(1024, H0 ‖ LE32(1) ‖ LE32(0))     // H' = Blake2b-long\nthen 262144 blocks × 3 passes of Argon2d (fBlaMka rounds; passes 1–2 XOR over every block)  →  256 MiB cache`,
+      why: "Read-only after this. The harness ran every fBlaMka / G-round / XOR of the fill through the abacus; the page recomputes the two seed blocks (H0 and H') and shows the final block 0.",
+      hint: "[argonBlockFirst64(K, 0), argonBlockFirst64(K, 1)]",
+      expect: () => run().argon2_first_blocks ? [run().argon2_first_blocks.block0_initial_first64, run().argon2_first_blocks.block1_initial_first64] : (run().argon2_cache ? run().argon2_cache.block0_first64 : ""),
+      recompute: () => run().argon2_first_blocks ? [hex(argonBlockFirst64(keyBytes(vec()), 0)), hex(argonBlockFirst64(keyBytes(vec()), 1))] : null,
+      env: () => ({ argonBlockFirst64, argonH0 }),
+      detail: () => { const a = run().argon2_cache; if (!a) return ""; return `H0 (page) = ${hex(argonH0(keyBytes(vec())))}<br>final block 0 first 64 B after 3 passes: ${a.block0_first64}<br>cache bytes ${a.bytes} · blake2b-256 fingerprint ${a.blake2b256_fingerprint}<br>Argon2 blocks verified by crystalline: ${a.blocks_checked} / ${a.blocks_total}<br>superscalar program sizes: ${[0,1,2,3,4,5,6,7].map(i => a["superscalar_prog_" + i + "_size"]).join(", ")}`; } },
+    { phase: "Slow clock", title: "Dataset item init (§7.3)", regs: "before",
+      spec: () => `n = item number\nrl0 = (n + 1) · 6364136223846793005\nrl1..7 = rl0 XOR c1..7\n8 × { superscalar program on rl; rl ^= cache block[rl[addr] mod 4194304] }`,
+      why: "Light mode: the item is computed on demand from the cache. Shown: the first item this hash touched.",
+      hint: "[mul64(add64(item, 1n), MUL0), ...SS.map(c => xor(mul64(add64(item, 1n), MUL0), c))]",
+      expect: () => run().dataset_items[0] ? arr64(run().dataset_items[0].rl_init) : null,
+      recompute: () => { const d = run().dataset_items[0]; if (!d) return null; const n = big(d.item); const r0 = mul64(add64(n, 1n), MUL0); return [r0, ...SS.map((c) => xor(r0, c))]; },
+      env: () => { const d = run().dataset_items[0]; return d ? { item: big(d.item), MUL0, SS } : {}; },
+      detail: () => { const d = run().dataset_items[0]; if (!d) return "no dataset item in this trace"; let s = `item ${big(d.item)} · mix block 0 offset ${d.mix_block_offset_0} (page: ${hex(and64(big(d.item), CACHE_MIX_MASK) * 64n)})<br>`; for (let i = 0; i < 8; i++) s += `after prog ${i}: ${d["rl_after_prog_" + i].join(" ")}<br>`; return s; } },
+    { phase: "Fast clock", title: "S = Blake2b-512(H)", regs: "before",
+      spec: () => "S = Hash512(H)     // 64 bytes; seeds the scratchpad fill and program 0",
+      why: "Real Blake2b in the page (RFC 7693) against the harness value.",
+      hint: "blake2b512(H)", expect: () => run().input_hash ? run().input_hash.blake2b512_of_input : "",
+      recompute: () => hex(blake2b512(vecBytes(vec()))) },
+    { phase: "Fast clock", title: "Scratchpad = AesGenerator1R(S) · 2 MiB", regs: "before",
+      spec: () => `state0..3 = S[0..16], S[16..32], S[32..48], S[48..64]\nrepeat 32768×: state0 = AESdec(state0, k0); state1 = AESenc(state1, k1); state2 = AESdec(state2, k2); state3 = AESenc(state3, k3); emit 64 bytes\nk0..k3 = fixed keys from Hash512("RandomX AesGenerator1R keys")`,
+      why: "One AES round per 16 bytes. The page rebuilds the AES S-box and T-tables from GF(2^8) and recomputes the first 64 bytes; the harness verified all 32768 steps.",
+      hint: "AES.gen1R_first64(S)", expect: () => run().scratchpad ? run().scratchpad.first64 : "",
+      recompute: () => hex(AES.gen1R_first64(bytes(run().input_hash.blake2b512_of_input))),
+      detail: () => run().scratchpad ? `${run().scratchpad.bytes} bytes · blake2b-256 fingerprint ${run().scratchpad.blake2b256_fingerprint}` : "" },
+    { phase: "VM", title: "Program = AesGenerator4R(seed)", regs: "before",
+      spec: () => `seed = ${cur.prog === 0 ? "final state of AesGenerator1R after the 2 MiB scratchpad fill (it is written back over S)" : "Hash512(register file after program " + (cur.prog - 1) + ")"}\n4 AES rounds per 16 bytes, keys k0..k7\nprogram = 16 × u64 entropy ‖ ${P() ? P().size : 256} instructions × 8 bytes`,
+      why: "Programs are not chosen; they fall out of AES. The page recomputes the first 64 bytes = entropy[0..8] (for program 0 it first runs the whole 2 MiB AesGenerator1R in JS to get the seed).",
+      hint: "AES.gen4R_first64(seed)", expect: () => P() ? P().program_bytes_first64 : "",
+      recompute: () => hex(AES.gen4R_first64(progSeed())),
+      env: () => ({ seed: progSeed() }),
+      detail: () => P() ? "seed (64 B): " + hex(progSeed()) + "<br>entropy: " + P().entropy.join(" ") : "" },
+    { phase: "VM", title: "Entropy → a, ma, mx, readRegs, offset, eMask", regs: "before",
+      spec: () => `a[i] = SmallPositiveFloat(ent[0..8])   // exp = (e>>59)+1023, mantissa = e & 2^52-1\nma = ent[8] & 0x7FFFFFC0\nmx = lo32(ent[10])\nreadReg0..3 = 0/2/4/6 + bits of ent[12]\ndatasetOffset = (ent[13] mod 524288) · 64\neMask[i] = (ent[14+i] & 2^22-1) | ((0x300 | (ent[14+i]>>60)<<4) << 52)`,
+      why: "Every VM parameter is a formula of the entropy words. All checkable.",
+      hint: "[...ent.slice(0,8).map(smallPositiveFloat), and64(ent[8], 0x7FFFFFC0n), and64(ent[10], 0xFFFFFFFFn), mul64(ent[13] % 524288n, 64n), floatMask(ent[14]), floatMask(ent[15])]",
+      expect: () => { const p = P(); if (!p) return null; return [...vecs(p.a).flat(), big(p.ma), big(p.mx), big(p.datasetOffset), ...arr64(p.eMask)]; },
+      recompute: () => { const p = P(); if (!p) return null; const ent = arr64(p.entropy); return [...ent.slice(0, 8).map(smallPositiveFloat), and64(ent[8], CACHE_LINE_ALIGN), and64(ent[10], 0xFFFFFFFFn), mul64(ent[13] % (DATASET_EXTRA_ITEMS + 1n), 64n), floatMask(ent[14]), floatMask(ent[15])]; },
+      env: () => P() ? { ent: arr64(P().entropy), smallPositiveFloat, floatMask } : {},
+      detail: () => { const p = P(); if (!p) return ""; const ent = arr64(p.entropy); const rr = [0, 2, 4, 6].map((b, i) => b + Number((ent[12] >> BigInt(i)) & 1n)); return `readReg (harness): ${p.readReg0} ${p.readReg1} ${p.readReg2} ${p.readReg3} · (page): ${rr.join(" ")}`; } },
+    { phase: "4.6.2", title: "1  spMix, spAddr0/1", regs: "before",
+      spec: () => `spMix = r[readReg0] XOR r[readReg1]\nspAddr0 = (spAddr0 XOR spMix) AND 0x1FFFC0        // spAddr0 starts as mx on ic = 0, else 0\nspAddr1 = (spAddr1 XOR (spMix >> 32)) AND 0x1FFFC0  // starts as ma on ic = 0`,
+      why: "You do not pick the address.",
+      hint: "and64(xor(cur.iter === 0 ? mx : 0n, xor(r[readReg0], r[readReg1])), 0x1FFFC0n)",
+      expect: () => I() ? big(I().spAddr0) : null,
+      recompute: () => { const it = I(), p = P(); if (!it) return null; const r = arr64(it.r_before_step1); const mix = xor(r[p.readReg0], r[p.readReg1]); return and64(xor(cur.iter === 0 ? big(it.mx_in) : 0n, mix), MASK_L3_64); },
+      detail: () => { const it = I(), p = P(); if (!it) return ""; const r = arr64(it.r_before_step1); const mix = xor(r[p.readReg0], r[p.readReg1]); const a1 = and64(xor(cur.iter === 0 ? big(it.ma_in) : 0n, shr(mix, 32)), MASK_L3_64); return `spMix harness ${it.spMix} · page ${hex(mix)}<br>spAddr1 harness ${it.spAddr1} · page ${hex(a1)}`; } },
+    { phase: "4.6.2", title: "2  r XOR= P[spAddr0] · 64 B", regs: "step2",
+      spec: () => "r[i] ^= LE64(P[spAddr0 + 8i])   for i = 0..7",
+      why: "The scratchpad bytes at spAddr0 are in the trace, so the page can redo the XOR.",
+      hint: "r.map((x, i) => xor(x, le64(sp0, 8 * i)))",
+      expect: () => I() ? arr64(I().r_after_step2) : null,
+      recompute: () => { const it = I(); if (!it) return null; const sp = bytes(it.scratchpad_at_spAddr0); return arr64(it.r_before_step1).map((x, i) => xor(x, le64(sp, 8 * i))); } },
+    { phase: "4.6.2", title: "3  f, e ← P[spAddr1]", regs: "step3",
+      spec: () => `f[i] = (double)int32(P[spAddr1 + 8i]), (double)int32(P[spAddr1 + 8i + 4])          i = 0..3\ne[i] = same from P[spAddr1 + 32 + 8i], then bits = (bits AND 2^56-1) OR eMask[lane]`,
+      why: "Integers become exact doubles; the E group gets its exponent from eMask.",
+      hint: "[...[0,1,2,3].map(i => cvtI32Pair(sp1, 8*i)), ...[0,1,2,3].map(i => cvtI32Pair(sp1, 32 + 8*i).map((b, l) => or64(and64(b, DYN_MANT_MASK), eMask[l])))]",
+      expect: () => I() ? [...vecs(I().f_after_step3), ...vecs(I().e_after_step3)] : null,
+      recompute: () => { const it = I(), p = P(); if (!it) return null; const sp = bytes(it.scratchpad_at_spAddr1); const em = arr64(p.eMask); return [...[0, 1, 2, 3].map((i) => cvtI32Pair(sp, 8 * i)), ...[0, 1, 2, 3].map((i) => cvtI32Pair(sp, 32 + 8 * i).map((b, l) => or64(and64(b, DYN_MANT_MASK), em[l])))]; } },
+    { phase: "4.6.2", title: "4  execute the program", regs: "step4",
+      spec: () => `${P() ? P().size : 256} instructions from tables 5.2–5.5 (IADD_RS, IMUL_RCP, FMUL_R, CBRANCH, CFROUND, ISTORE …). Not one formula.`,
+      why: "Every integer op, float op (all 4 rounding modes), address mask and branch test in here went through the abacus.",
+      hint: "r", expect: () => I() ? arr64(I().r_after_step4) : null,
+      detail: () => { const it = I(); if (!it) return ""; return `crystalline ops in this iteration's program: ${(it.ops_after_step4 - it.ops).toLocaleString()}<br>f after: ${it.f_after_step4.map((p) => p.join("/")).join(" ")}<br>e after: ${it.e_after_step4.map((p) => p.join("/")).join(" ")}`; } },
+    { phase: "4.6.2", title: "5  mx ^= r[readReg2] XOR r[readReg3]", regs: "step4",
+      spec: () => cur.ver === "v2" ? "ma ^= lo32(r[readReg2] XOR r[readReg3])   // v2: the prefetch register is ma" : "mx ^= lo32(r[readReg2] XOR r[readReg3])",
+      why: "Next dataset address.",
+      hint: "and64(xor(cur.ver === 'v2' ? ma : mx, xor(r[readReg2], r[readReg3])), 0xFFFFFFFFn)",
+      expect: () => I() ? big(cur.ver === "v2" ? I().ma_before_swap : I().mx_before_swap) : null,
+      recompute: () => { const it = I(), p = P(); if (!it) return null; const r = arr64(it.r_after_step4); return and64(xor(big(cur.ver === "v2" ? it.ma_in : it.mx_in), xor(r[p.readReg2], r[p.readReg3])), 0xFFFFFFFFn); } },
+    { phase: "4.6.2", title: "6  prefetch D[offset + mp]", regs: "step4",
+      spec: () => "prefetch only. Does not change R.", why: "Latency hiding.", hint: "0n", expect: () => 0n, recompute: () => 0n },
+    { phase: "4.6.2", title: "7  r XOR= D[item] · 64 B", regs: "step7",
+      spec: () => "readPtr = datasetOffset + (ma AND 0x7FFFFFC0)\nitem = readPtr / 64\nr[i] ^= D[item][i]",
+      why: "Wrong item → wrong R. This is the gold pen. The dataset line is in the trace.",
+      hint: "r.map((x, i) => xor(x, dsline[i]))",
+      expect: () => I() ? arr64(I().r_after_step7) : null,
+      recompute: () => { const it = I(); if (!it || !it.dataset_line_step7) return null; const ds = arr64(it.dataset_line_step7); return arr64(it.r_after_step4).map((x, i) => xor(x, ds[i])); },
+      detail: () => { const it = I(), p = P(); if (!it) return ""; const rp = add64(big(p.datasetOffset), and64(big(it.ma_in), CACHE_LINE_ALIGN)); return `readPtr harness ${it.readPtr_step7} · page ${hex(rp)} · item ${it.dataset_item_step7 ? big(it.dataset_item_step7) : shr(rp, 6)}`; } },
+    { phase: "4.6.2", title: "8  swap(mx, ma)", regs: "step7",
+      spec: () => "(mx, ma) ← (ma, mx)", why: "Checked against the next recorded iteration's mx/ma when it is consecutive.",
+      hint: "ma_before_swap", expect: () => Inext() && Inext().ic === I().ic + 1 ? big(Inext().mx_in) : null,
+      recompute: () => I() && Inext() && Inext().ic === I().ic + 1 ? big(I().ma_before_swap) : null },
+    { phase: "4.6.2", title: "9  P[spAddr1] ← r", regs: "step7",
+      spec: () => "write 64 B integers back to the scratchpad", why: "Store.", hint: "r", expect: () => I() ? arr64(I().r_after_step7) : null },
+    { phase: "4.6.2", title: "10  f ← f XOR e  (v1) · AES(f, e)  (v2)", regs: "step10",
+      spec: () => cur.ver === "v2" ? "for i in 0..3: f0 = AESenc(f0, e[i]); f1 = AESdec(f1, e[i]); f2 = AESenc(f2, e[i]); f3 = AESdec(f3, e[i])" : "f[i] = f[i] XOR e[i]   (bits, not a float add)",
+      why: "Monero mainnet is v1 until the v2 fork. Both are in the harness; the page recomputes either.",
+      hint: "cur.ver === 'v2' ? null : f.map((p, i) => [xor(p[0], e[i][0]), xor(p[1], e[i][1])])",
+      expect: () => I() ? vecs(I().f_after_step10) : null,
+      recompute: () => { const it = I(); if (!it) return null; const f = vecs(it.f_after_step4), e = vecs(it.e_after_step4);
+        if (cur.ver !== "v2") return f.map((p, i) => [xor(p[0], e[i][0]), xor(p[1], e[i][1])]);
+        const tb = (p) => cat(u64le(p[0]), u64le(p[1])); let fr = f.map(tb); const ek = e.map(tb);
+        for (let i = 0; i < 4; i++) { fr[0] = AES.aesenc(fr[0], ek[i]); fr[1] = AES.aesdec(fr[1], ek[i]); fr[2] = AES.aesenc(fr[2], ek[i]); fr[3] = AES.aesdec(fr[3], ek[i]); }
+        return fr.map((b) => [le64(b, 0), le64(b, 8)]); } },
+    { phase: "4.6.2", title: "11  P[spAddr0] ← f", regs: "step10", spec: () => "write floats to the scratchpad", why: "Store.", hint: "f", expect: () => I() ? vecs(I().f_after_step10) : null },
+    { phase: "4.6.2", title: "12  spAddr ← 0", regs: "step10", spec: () => "spAddr0 ← 0; spAddr1 ← 0", why: "Next iteration mixes from zero.", hint: "0n", expect: () => 0n, recompute: () => 0n },
+    { phase: "4.6.2", title: "13  ic ← ic − 1", regs: "step10", spec: () => "if ic > 0: go to step 1     // 2048 iterations per program", why: "Recorded iterations: 0, 1, 2 and 2047 of each program.", hint: "2047n - BigInt(ic)", expect: () => I() ? 2047n - BigInt(I().ic) : null, recompute: () => I() ? 2047n - BigInt(I().ic) : null, env: () => I() ? { ic: I().ic } : {} },
+    { phase: "Chain", title: "Hash512(register file) → next seed", regs: "end",
+      spec: () => `after program ${cur.prog}: tempHash = Blake2b-512(r ‖ f ‖ e ‖ a)   // 256 bytes${cur.prog === 7 ? "\n(the last program does not reseed; it goes to the fold)" : ""}`,
+      why: "The register file is in the trace; the page hashes it.",
+      hint: "blake2b512(regfile)", expect: () => cur.prog < 7 && run().chain[cur.prog] ? run().chain[cur.prog].blake2b512_of_register_file : (run().program_end[cur.prog] ? "(no chain after the last program)" : ""),
+      recompute: () => cur.prog < 7 && run().program_end[cur.prog] ? hex(blake2b512(bytes(run().program_end[cur.prog].register_file))) : null,
+      env: () => run().program_end[cur.prog] ? { regfile: bytes(run().program_end[cur.prog].register_file) } : {} },
+    { phase: "Fold", title: "A = AesHash1R(P) · R = Blake2b-256(r ‖ f ‖ e ‖ A)", regs: "end",
+      spec: () => "A = AesHash1R(scratchpad)          // 64 bytes, 2 MiB in, 2 extra rounds\nR = Hash256(RegisterFile with a := A)",
+      why: "The pool checks R. The page recomputes R from the dumped final register file.",
+      hint: "blake2b256(regfileA)", expect: () => run().final ? run().final.R_blake2b256 : "",
+      recompute: () => run().final ? hex(blake2b256(bytes(run().final.register_file_r_f_e_A))) : null,
+      env: () => run().final ? { regfileA: bytes(run().final.register_file_r_f_e_A), A: bytes(run().final.A_aeshash1r_of_scratchpad) } : {},
+      detail: () => run().final ? "A = " + run().final.A_aeshash1r_of_scratchpad : "" },
+    { phase: "Lottery", title: "valid iff n < 2^256 / D", regs: "end",
+      spec: () => "n = LE256(R)\nT = floor(2^256 / D)\nvalid iff n < T", why: "Share difficulty D comes from the pool.",
+      hint: "LE256(R) < (1n << 256n) / difficulty", expect: () => run().final ? (le256(bytes(run().final.R_blake2b256)) < (1n << 256n) / 48n) : null,
+      recompute: () => run().final ? (le256(bytes(run().final.R_blake2b256)) < (1n << 256n) / 48n) : null,
+      env: () => ({ difficulty: 48n, LE256: le256 }) },
+    { phase: "Pool", title: "Pool re-runs RandomX · accept / reject", regs: "end",
+      spec: () => "pool_R = RandomX(K, H)\naccept iff pool_R == your_R  and  n < T",
+      why: "The official vector is the pool's answer for this K, H.",
+      hint: "official", expect: () => vec().official[cur.ver] || "", recompute: () => run().job_end ? run().job_end.R : null, env: () => ({ official: vec().official[cur.ver] || "" }) },
+    { phase: "Crystalline", title: "Every op through the abacus", regs: "end",
+      spec: () => "mode strict: the abacus result is the one used. One wrong bead anywhere → wrong R.\nharness value = mismatches between the abacus and native arithmetic in this job (must be 0); page value = 0 iff harness R equals the official vector",
+      why: "Counts for this run.", hint: "mismatches",
+      expect: () => run().job_end ? BigInt(run().job_end.mismatches_this_job) : null,
+      recompute: () => run().job_end && vec().official[cur.ver] ? (run().job_end.R.toLowerCase() === vec().official[cur.ver].toLowerCase() ? 0n : 1n) : null,
+      env: () => ({ totalOps: run().job_end ? BigInt(run().job_end.ops_this_job) : 0n, mismatches: run().job_end ? BigInt(run().job_end.mismatches_this_job) : 0n }),
+      detail: () => countersHtml() },
+    { phase: "Crystalline", title: "Findings in the crystalline library", regs: "end",
+      spec: () => "What the RandomX differential found in crystalline-main/math (all reproduced with minimal inputs; see PATCHES.md in the lab folder).",
+      why: "", hint: "", expect: () => "", detail: () => findingsHtml() },
+  ];
+  const le256 = (b) => { let v = 0n; for (let i = 31; i >= 0; i--) v = (v << 8n) | BigInt(b[i]); return v; };
+  /* program p's 64-byte seed: p = 0 -> AesGenerator1R end state after 2 MiB; p > 0 -> chain hash after program p-1 */
+  function progSeed() {
+    if (cur.prog === 0) return AES.gen1R(bytes(run().input_hash.blake2b512_of_input), 2097152).finalState;
+    return bytes(run().chain[cur.prog - 1].blake2b512_of_register_file);
+  }
+
+  function countersHtml() {
+    const c = run().counters; if (!c) return "no counters";
+    let s = `<table><tr><th>op</th><th>calls</th><th>mismatches</th></tr>`;
+    for (const o of c.by_op) s += `<tr><td>${o.name}</td><td class="num">${o.calls.toLocaleString()}</td><td class="num ${o.mismatches ? "bad" : "ok"}">${o.mismatches}</td></tr>`;
+    s += `<tr><th>total (process)</th><td class="num">${c.total_calls.toLocaleString()}</td><td class="num ${c.total_mismatches ? "bad" : "ok"}">${c.total_mismatches}</td></tr></table>`;
+    s += `<p class="hint">mode ${c.mode} · Argon2 blocks verified ${c.argon2_blocks_checked.toLocaleString()} / ${c.argon2_blocks_total.toLocaleString()}` +
+         (run().job_end ? ` · this job: ${run().job_end.ops_this_job.toLocaleString()} abacus ops, ${run().job_end.mismatches_this_job} mismatches, ${run().job_end.seconds}s` +
+           (run().job_end.native_ops_this_job !== undefined ? ` (${run().job_end.native_ops_this_job.toLocaleString()} ops served natively while the trace hook hashed the scratchpad fingerprint)` : "") +
+           (run().job_end.ops_note ? ` (${run().job_end.ops_note})` : "") : "") +
+         (run().aes_tables ? ` · AES tables from GF(2^8): ${run().aes_tables.mismatching_entries} / ${run().aes_tables.entries} mismatching` : "") + `</p>`;
+    s += `<p class="hint">Integer ops are base-65536 abaci; bitwise ops are digit-wise on base-2 abaci; rotates are bead re-indexing; division and square root are long division / digit-by-digit root from abacus_compare / abacus_sub / abacus_shift_*; doubles are integer mantissas with a C-side exponent, rounded by inspecting the beads.</p>`;
+    return s;
+  }
+  function findingsHtml() {
+    const F = DATA.findings || [];
+    let s = `<table><tr><th>#</th><th>where</th><th>defect</th><th>minimal repro</th><th>status</th></tr>`;
+    F.forEach((f, i) => { s += `<tr><td>${i + 1}</td><td>${f.where}</td><td>${f.defect}</td><td>${f.repro}</td><td>${f.status}</td></tr>`; });
+    return s + "</table>";
+  }
+
+  /* ------------------------------------------------------------- env */
+  function env() {
+    const s = STEPS[cur.step];
+    const it = I(), p = P();
+    const base = { u64, lo32, hi32, xor, and64, or64, add64, sub64, mul64, shl, shr, big, bytes, hex, eq, le64, le32, blake2b256, blake2b512, AES, f64, bitsOf, cvtI32Pair, MUL0, SS, DYN_MANT_MASK, MASK_L3_64, argonBlock0First64, cur,
+      K: keyBytes(vec()), H: vecBytes(vec()), S: run().input_hash ? bytes(run().input_hash.blake2b512_of_input) : null };
+    if (p) Object.assign(base, { ent: arr64(p.entropy), readReg0: p.readReg0, readReg1: p.readReg1, readReg2: p.readReg2, readReg3: p.readReg3, datasetOffset: big(p.datasetOffset), eMask: arr64(p.eMask), a: vecs(p.a) });
+    if (it) {
+      const stage = s.regs;
+      const r = stage === "before" ? it.r_before_step1 : stage === "step2" || stage === "step3" ? it.r_after_step2 : stage === "step4" ? it.r_after_step4 : it.r_after_step7;
+      const f = stage === "step4" || stage === "step7" ? it.f_after_step4 : stage === "step10" || stage === "end" ? it.f_after_step10 : it.f_after_step3;
+      const e = stage === "before" || stage === "step2" ? it.e_after_step3 : it.e_after_step4 || it.e_after_step3;
+      Object.assign(base, { r: arr64(r), f: vecs(f), e: vecs(e), mx: big(it.mx_in), ma: big(it.ma_in), spAddr0: big(it.spAddr0), spAddr1: big(it.spAddr1), spMix: big(it.spMix),
+        sp0: bytes(it.scratchpad_at_spAddr0), sp1: bytes(it.scratchpad_at_spAddr1), dsline: it.dataset_line_step7 ? arr64(it.dataset_line_step7) : null,
+        mx_before_swap: big(it.mx_before_swap), ma_before_swap: big(it.ma_before_swap), ic: it.ic });
+      for (let i = 0; i < 8; i++) base["r" + i] = base.r[i];
+    }
+    if (s.env) Object.assign(base, s.env());
+    return base;
+  }
+  function evalExpr(src) { const e = env(); const keys = Object.keys(e); const fn = new Function(...keys, "return (" + src + ")"); return fn(...keys.map((k) => e[k])); }
+
+  /* --------------------------------------------------------------- paint */
+  function fmt(x) {
+    if (x === null || x === undefined) return "—";
+    if (x instanceof Uint8Array) return hex(x);
+    if (typeof x === "bigint") return "0x" + hex(x);
+    if (Array.isArray(x)) return x.map(fmt).join("  ");
+    if (typeof x === "boolean") return x ? "true" : "false";
+    return String(x);
+  }
+  const status = {};    // step index -> "ok" | "bad" | "na"
+  function evalStep(i) {
+    const s = STEPS[i]; try { const ex = s.expect(); const rc = s.recompute ? s.recompute() : null;
+      if (rc === null || rc === undefined || ex === null || ex === undefined || ex === "") return "na"; return eq(rc, ex) ? "ok" : "bad"; } catch (e) { return "bad"; }
+  }
+  function paintSteps() {
+    const box = $("steps"); box.innerHTML = ""; let last = "";
+    STEPS.forEach((s, i) => {
+      if (s.phase !== last) { const p = document.createElement("div"); p.className = "phase"; p.textContent = s.phase; box.appendChild(p); last = s.phase; }
+      const d = document.createElement("div"); d.className = "step" + (i === cur.step ? " on" : "");
+      status[i] = full() || i < 1 || i > 21 ? evalStep(i) : "na";
+      d.innerHTML = "<span class='n'>" + (i + 1) + "</span><span>" + s.title + "</span><span class='dot " + status[i] + "'></span>";
+      d.onclick = () => { cur.step = i; show(); }; box.appendChild(d);
+    });
+  }
+  function chunks(h) { h = String(h).replace(/[^0-9a-f]/gi, "").toLowerCase(); const out = []; for (let i = 0; i < h.length; i += 8) out.push(h.slice(i, i + 8)); return out; }
+  function paintHex(el, h, vs) { const a = chunks(h), b = vs ? chunks(vs) : null; el.innerHTML = a.map((c, i) => "<span class='" + (b ? (c === b[i] ? "hit" : "miss") : "") + "'>" + c + "</span>").join(""); }
+  function showRegs() {
+    const it = I(), e = env(); let h = "";
+    if (it) {
+      for (let i = 0; i < 8; i++) h += "<span class='k'>r" + i + "</span><span class='v'>" + hex(e.r[i]) + "</span>";
+      for (let i = 0; i < 4; i++) h += "<span class='k'>f" + i + "</span><span class='v'>" + hex(e.f[i][0]) + " " + hex(e.f[i][1]) + "</span>";
+      for (let i = 0; i < 4; i++) h += "<span class='k'>e" + i + "</span><span class='v'>" + hex(e.e[i][0]) + " " + hex(e.e[i][1]) + "</span>";
+      for (let i = 0; i < 4; i++) h += "<span class='k'>a" + i + "</span><span class='v'>" + hex(e.a[i][0]) + " " + hex(e.a[i][1]) + "</span>";
+      h += "<span class='k'>ma</span><span class='v'>" + hex(e.ma, 8) + "</span><span class='k'>mx</span><span class='v'>" + hex(e.mx, 8) + "</span>";
+      h += "<span class='k'>spA0</span><span class='v'>" + hex(e.spAddr0, 8) + "</span><span class='k'>spA1</span><span class='v'>" + hex(e.spAddr1, 8) + "</span>";
+      h += "<span class='k'>ic</span><span class='v'>" + it.ic + " (" + (2047 - it.ic) + " left)</span><span class='k'>prog</span><span class='v'>" + cur.prog + "</span>";
+    } else h = "<span class='hint'>no full trace for this vector/version (result only)</span>";
+    $("regs").innerHTML = h;
+    const off = vec().official[cur.ver] || ""; const lab = run().job_end ? run().job_end.R : (run().final ? run().final.R_blake2b256 : "");
+    const page = run().final ? hex(blake2b256(bytes(run().final.register_file_r_f_e_A))) : "";
+    paintHex($("v1a"), off); paintHex($("labR"), lab, off); paintHex($("pageR"), page, off);
+    const same = off && lab && off.toLowerCase() === lab.toLowerCase();
+    $("v1abadge").textContent = same ? "match · " + vec().name + " " + cur.ver : (off ? "harness ≠ official" : "no official vector");
+    $("v1abadge").className = "badge " + (same ? "same" : "diff");
+    $("topbadge").textContent = same ? "official " + vec().name + " " + cur.ver + " ✓" : "—";
+    $("topbadge").className = "badge " + (same ? "same" : "diff");
+    $("vecdesc").innerHTML = `K = "${vec().key}" · H = ${vec().input.length > 40 ? vec().input.slice(0, 40) + "…" : vec().input} · tevador tests.cpp ${vec().name}`;
+  }
+  function show() {
+    const s = STEPS[cur.step]; paintSteps();
+    $("stitle").textContent = (cur.step + 1) + " / " + STEPS.length + "  ·  " + s.title + (cur.step >= 7 && cur.step <= 19 ? "   (program " + cur.prog + ", iteration " + (I() ? I().ic : "?") + ")" : "");
+    $("swhy").textContent = s.why || ""; $("sspec").textContent = s.spec(); $("expr").value = s.hint || "";
+    let ex = null; try { ex = s.expect(); } catch (e) { ex = "error: " + e.message; }
+    $("expect").textContent = fmt(ex); $("got").textContent = "—";
+    let rc = null; try { rc = s.recompute ? s.recompute() : null; } catch (e) { rc = "error: " + e.message; }
+    $("recomp").textContent = rc === null ? "(not recomputable in the page)" : fmt(rc);
+    $("recomp").className = "v " + (rc === null ? "dim" : (eq(rc, ex) ? "ok" : "bad"));
+    $("verdict").textContent = rc === null ? "harness value shown; type a formula and check it" : (eq(rc, ex) ? "page recomputation = harness value" : "page recomputation ≠ harness value");
+    $("verdict").className = "verdict " + (rc === null ? "" : (eq(rc, ex) ? "pass" : "fail"));
+    $("detail").innerHTML = s.detail ? (s.detail() || "") : ""; $("detail").style.display = s.detail && s.detail() ? "" : "none";
+    const e = env(); $("envhint").textContent = "names: " + Object.keys(e).filter((k) => e[k] !== null && e[k] !== undefined).join(" ");
+    const it = I(); $("opsnote").textContent = it && cur.step >= 7 && cur.step <= 19 ? "crystalline ops so far at this iteration: " + it.ops.toLocaleString() : (run().job_end ? "crystalline ops this job: " + run().job_end.ops_this_job.toLocaleString() : "");
+    showRegs();
+  }
+  $("recompute").onclick = show;
+  $("check").onclick = () => {
+    const src = $("expr").value.trim(); const s = STEPS[cur.step];
+    try { const val = evalExpr(src); $("got").textContent = fmt(val); const ex = s.expect(); const ok = eq(val, ex);
+      $("verdict").textContent = ok ? "match — same value as the harness for this step" : "different — not the harness result";
+      $("verdict").className = "verdict " + (ok ? "pass" : "fail"); }
+    catch (err) { $("got").textContent = String(err.message || err); $("verdict").textContent = "could not evaluate"; $("verdict").className = "verdict fail"; }
+  };
+  $("prev").onclick = () => { cur.step = Math.max(0, cur.step - 1); show(); };
+  $("next").onclick = () => { cur.step = Math.min(STEPS.length - 1, cur.step + 1); show(); };
+
+  function fillSelects() {
+    $("selVec").innerHTML = VECTORS.map((v, i) => `<option value="${i}">${v.name}${v.runs.v1 && v.runs.v1.programs && v.runs.v1.programs.length ? "" : " (result only)"}</option>`).join("");
+    $("selVer").innerHTML = ["v1", "v2"].map((v) => `<option value="${v}" ${vec().runs[v] ? "" : "disabled"}>${v}</option>`).join("");
+    $("selProg").innerHTML = [0, 1, 2, 3, 4, 5, 6, 7].map((p) => `<option value="${p}">${p}</option>`).join("");
+    const its = full() ? run().iters[cur.prog] : [];
+    $("selIter").innerHTML = its.map((it, i) => `<option value="${i}">${it.ic}</option>`).join("") || "<option>—</option>";
+    $("selVec").value = cur.vec; $("selVer").value = cur.ver; $("selProg").value = cur.prog; $("selIter").value = cur.iter;
+  }
+  $("selVec").onchange = (e) => { cur.vec = +e.target.value; if (!vec().runs[cur.ver]) cur.ver = vec().runs.v1 ? "v1" : "v2"; cur.prog = 0; cur.iter = 0; fillSelects(); show(); };
+  $("selVer").onchange = (e) => { cur.ver = e.target.value; cur.prog = 0; cur.iter = 0; fillSelects(); show(); };
+  $("selProg").onchange = (e) => { cur.prog = +e.target.value; cur.iter = 0; fillSelects(); show(); };
+  $("selIter").onchange = (e) => { cur.iter = +e.target.value; show(); };
+  fillSelects(); show();
+})();
+</script>
+</body>
+</html>

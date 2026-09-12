@@ -1,0 +1,126 @@
+# Makefile for Platonic Solid Generator Library
+# Part of the Crystalline CLLM Math Library
+
+CC = gcc
+CFLAGS = -Wall -Wextra -O2 -fPIC -I./include
+LDFLAGS = -L./lib -lcrystallinemath -lm
+
+# Directories
+SRC_DIR = src/platonic
+OBJ_DIR = obj/platonic
+LIB_DIR = lib
+TEST_DIR = tests/platonic
+BIN_DIR = bin
+
+# Source files
+SRCS = $(SRC_DIR)/schlafli_parser.c \
+       $(SRC_DIR)/generator_core.c \
+       $(SRC_DIR)/simplex_generator.c \
+       $(SRC_DIR)/hypercube_generator.c \
+       $(SRC_DIR)/cross_polytope_generator.c \
+       $(SRC_DIR)/dodecahedron_generator.c \
+       $(SRC_DIR)/icosahedron_generator.c \
+       $(SRC_DIR)/polytope_abacus.c \
+       $(SRC_DIR)/simplex_generator_abacus.c \
+       $(SRC_DIR)/hypercube_generator_abacus.c \
+       $(SRC_DIR)/cross_polytope_generator_abacus.c \
+       $(SRC_DIR)/dodecahedron_generator_abacus.c \
+       $(SRC_DIR)/icosahedron_generator_abacus.c \
+       $(SRC_DIR)/golden_ratio_abacus.c \
+       $(SRC_DIR)/platonic_clock.c
+
+# Object files
+OBJS = $(SRCS:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
+
+# Library names
+LIB_STATIC = $(LIB_DIR)/libplatonic.a
+LIB_SHARED = $(LIB_DIR)/libplatonic.so
+
+# Test files
+TEST_SRCS = $(TEST_DIR)/test_generator.c \
+            $(TEST_DIR)/test_clock_integration.c
+TEST_BINS = $(TEST_SRCS:$(TEST_DIR)/%.c=$(BIN_DIR)/%)
+
+# Default target
+all: directories $(LIB_STATIC) $(LIB_SHARED)
+
+# Create directories
+directories:
+	@mkdir -p $(OBJ_DIR)
+	@mkdir -p $(LIB_DIR)
+	@mkdir -p $(BIN_DIR)
+
+# Compile source files
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
+	@echo "Compiling $<..."
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Build static library
+$(LIB_STATIC): $(OBJS)
+	@echo "Building static library $@..."
+	@ar rcs $@ $(OBJS)
+	@echo "Static library built successfully!"
+
+# Build shared library
+$(LIB_SHARED): $(OBJS)
+	@echo "Building shared library $@..."
+	@$(CC) -shared -o $@ $(OBJS) $(LDFLAGS)
+	@echo "Shared library built successfully!"
+
+# Build tests
+tests: directories $(LIB_STATIC) $(TEST_BINS)
+
+$(BIN_DIR)/%: $(TEST_DIR)/%.c $(LIB_STATIC)
+	@echo "Building test $@..."
+	@$(CC) $(CFLAGS) $< -o $@ $(LIB_STATIC) $(LDFLAGS)
+	@echo "Test built successfully!"
+
+# Run tests
+test: tests
+	@echo ""
+	@echo "Running tests..."
+	@echo "==============================================="
+	@LD_LIBRARY_PATH=./lib $(BIN_DIR)/test_generator
+	@echo "==============================================="
+	@echo ""
+	@echo "Running clock integration tests..."
+	@echo "==============================================="
+	@LD_LIBRARY_PATH=./lib $(BIN_DIR)/test_clock_integration
+	@echo "==============================================="
+	@echo ""
+
+# Clean
+clean:
+	@echo "Cleaning..."
+	@rm -rf $(OBJ_DIR)
+	@rm -rf $(LIB_DIR)
+	@rm -rf $(BIN_DIR)
+	@echo "Clean complete!"
+
+# Install (copy to parent lib directory)
+install: all
+	@echo "Installing libraries..."
+	@cp $(LIB_STATIC) ../lib/ 2>/dev/null || true
+	@cp $(LIB_SHARED) ../lib/ 2>/dev/null || true
+	@echo "Installation complete!"
+
+# Help
+help:
+	@echo "Platonic Solid Generator Library Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all        - Build static and shared libraries (default)"
+	@echo "  tests      - Build test programs"
+	@echo "  test       - Build and run tests"
+	@echo "  clean      - Remove all build artifacts"
+	@echo "  install    - Install libraries to parent lib directory"
+	@echo "  help       - Show this help message"
+	@echo ""
+	@echo "Libraries:"
+	@echo "  $(LIB_STATIC)  - Static library"
+	@echo "  $(LIB_SHARED)  - Shared library"
+	@echo ""
+	@echo "Tests:"
+	@echo "  $(BIN_DIR)/test_generator  - Generator test suite"
+
+.PHONY: all directories tests test clean install help

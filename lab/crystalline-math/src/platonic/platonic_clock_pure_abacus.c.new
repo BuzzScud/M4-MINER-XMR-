@@ -1,0 +1,300 @@
+/**
+ * @file platonic_clock.c (UPDATED VERSION)
+ * @brief Clock lattice integration for Platonic solid generators
+ * 
+ * UPDATED: Now uses pure Abacus operations for zero precision loss
+ */
+
+#include "math/platonic_clock.h"
+#include "math/prime.h"
+#include "math/arithmetic.h"
+#include "math/transcendental.h"
+#include <stdlib.h>
+#include <string.h>
+
+/* ============================================================================
+ * VERTEX TO PRIME MAPPING
+ * ============================================================================
+ */
+
+uint64_t platonic_vertex_to_prime(uint64_t vertex_idx) {
+    // Get the (vertex_idx + 1)th prime
+    // vertex_idx is 0-based, but prime indices are 1-based
+    return prime_nth(vertex_idx + 1);
+}
+
+uint64_t platonic_prime_to_vertex(uint64_t prime) {
+    // Get the index of this prime (1-based), then convert to 0-based vertex index
+    if (!prime_is_prime(prime)) {
+        return UINT64_MAX; // Not a prime
+    }
+    
+    // Count primes up to this prime to get its index
+    // This is a workaround until prime_index() is implemented
+    uint64_t count = 0;
+    for (uint64_t p = 2; p <= prime; p = prime_next(p)) {
+        count++;
+        if (p == prime) {
+            return count - 1; // Convert to 0-based
+        }
+    }
+    
+    return UINT64_MAX; // Should not reach here
+}
+
+/* ============================================================================
+ * PRIME TO CLOCK POSITION MAPPING
+ * ============================================================================
+ */
+
+MathError platonic_prime_to_clock_position(uint64_t prime, ClockPosition* pos) {
+    if (!pos) {
+        return MATH_ERROR_INVALID_ARG;
+    }
+    
+    // Use the clock lattice mapping function
+    return clock_map_prime_to_position(prime, pos);
+}
+
+MathError platonic_vertex_to_clock_position(uint64_t vertex_idx, ClockPosition* pos) {
+    if (!pos) {
+        return MATH_ERROR_INVALID_ARG;
+    }
+    
+    // Get prime for this vertex
+    uint64_t prime = platonic_vertex_to_prime(vertex_idx);
+    
+    // Map prime to clock position
+    return platonic_prime_to_clock_position(prime, pos);
+}
+
+/* ============================================================================
+ * CLOCK POSITION TO COORDINATES (PURE ABACUS VERSION)
+ * ============================================================================
+ */
+
+MathError platonic_clock_to_coordinates(const ClockPosition* pos,
+                                       uint32_t dimension,
+                                       CrystallineAbacus*** coords,
+                                       uint32_t base,
+                                       uint32_t precision) {
+    if (!pos || !coords || dimension == 0) {
+        return MATH_ERROR_INVALID_ARG;
+    }
+    
+    // Step 1: Convert angle and radius to Abacus
+    CrystallineAbacus* angle_abacus = abacus_from_double(pos->angle, base, precision);
+    CrystallineAbacus* radius_abacus = abacus_from_double(pos->radius, base, precision);
+    
+    if (!angle_abacus || !radius_abacus) {
+        if (angle_abacus) abacus_free(angle_abacus);
+        if (radius_abacus) abacus_free(radius_abacus);
+        return MATH_ERROR_OUT_OF_MEMORY;
+    }
+    
+    // Step 2: Compute sin and cos using pure Abacus
+    CrystallineAbacus* cos_angle = abacus_new(base);
+    CrystallineAbacus* sin_angle = abacus_new(base);
+    
+    MathError err = math_sincos_abacus(sin_angle, cos_angle, angle_abacus, precision);
+    if (err != MATH_SUCCESS) {
+        abacus_free(angle_abacus);
+        abacus_free(radius_abacus);
+        abacus_free(cos_angle);
+        abacus_free(sin_angle);
+        return err;
+    }
+    
+    // Step 3: Allocate coordinate array
+    *coords = (CrystallineAbacus**)calloc(dimension, sizeof(CrystallineAbacus*));
+    if (!*coords) {
+        abacus_free(angle_abacus);
+        abacus_free(radius_abacus);
+        abacus_free(cos_angle);
+        abacus_free(sin_angle);
+        return MATH_ERROR_OUT_OF_MEMORY;
+    }
+    
+    // Step 4: Compute x = radius * cos(angle) using pure Abacus
+    if (dimension >= 1) {
+        (*coords)[0] = abacus_new(base);
+        if (!(*coords)[0]) {
+            free(*coords);
+            *coords = NULL;
+            abacus_free(angle_abacus);
+            abacus_free(radius_abacus);
+            abacus_free(cos_angle);
+            abacus_free(sin_angle);
+            return MATH_ERROR_OUT_OF_MEMORY;
+        }
+        
+        err = abacus_mul((*coords)[0], radius_abacus, cos_angle);
+        if (err != MATH_SUCCESS) {
+            abacus_free((*coords)[0]);
+            free(*coords);
+            *coords = NULL;
+            abacus_free(angle_abacus);
+            abacus_free(radius_abacus);
+            abacus_free(cos_angle);
+            abacus_free(sin_angle);
+            return err;
+        }
+    }
+    
+    // Step 5: Compute y = radius * sin(angle) using pure Abacus
+    if (dimension >= 2) {
+        (*coords)[1] = abacus_new(base);
+        if (!(*coords)[1]) {
+            if (dimension >= 1) abacus_free((*coords)[0]);
+            free(*coords);
+            *coords = NULL;
+            abacus_free(angle_abacus);
+            abacus_free(radius_abacus);
+            abacus_free(cos_angle);
+            abacus_free(sin_angle);
+            return MATH_ERROR_OUT_OF_MEMORY;
+        }
+        
+        err = abacus_mul((*coords)[1], radius_abacus, sin_angle);
+        if (err != MATH_SUCCESS) {
+            if (dimension >= 1) abacus_free((*coords)[0]);
+            abacus_free((*coords)[1]);
+            free(*coords);
+            *coords = NULL;
+            abacus_free(angle_abacus);
+            abacus_free(radius_abacus);
+            abacus_free(cos_angle);
+            abacus_free(sin_angle);
+            return err;
+        }
+    }
+    
+    // Step 6: Compute z = sqrt(1 - r²) using pure Abacus
+    if (dimension >= 3) {
+        (*coords)[2] = abacus_new(base);
+        if (!(*coords)[2]) {
+            if (dimension >= 1) abacus_free((*coords)[0]);
+            if (dimension >= 2) abacus_free((*coords)[1]);
+            free(*coords);
+            *coords = NULL;
+            abacus_free(angle_abacus);
+            abacus_free(radius_abacus);
+            abacus_free(cos_angle);
+            abacus_free(sin_angle);
+            return MATH_ERROR_OUT_OF_MEMORY;
+        }
+        
+        // Compute 1 - r²
+        CrystallineAbacus* one = abacus_from_uint64(1, base);
+        CrystallineAbacus* r_squared = abacus_new(base);
+        CrystallineAbacus* one_minus_r_sq = abacus_new(base);
+        
+        abacus_mul(r_squared, radius_abacus, radius_abacus);
+        abacus_sub(one_minus_r_sq, one, r_squared);
+        
+        // Check if result is negative (radius > 1)
+        if (one_minus_r_sq->negative) {
+            // Set z = 0
+            abacus_from_uint64((*coords)[2], 0);
+        } else {
+            // Compute sqrt(1 - r²)
+            err = math_sqrt_abacus((*coords)[2], one_minus_r_sq, precision);
+            if (err != MATH_SUCCESS) {
+                abacus_free(one);
+                abacus_free(r_squared);
+                abacus_free(one_minus_r_sq);
+                if (dimension >= 1) abacus_free((*coords)[0]);
+                if (dimension >= 2) abacus_free((*coords)[1]);
+                abacus_free((*coords)[2]);
+                free(*coords);
+                *coords = NULL;
+                abacus_free(angle_abacus);
+                abacus_free(radius_abacus);
+                abacus_free(cos_angle);
+                abacus_free(sin_angle);
+                return err;
+            }
+        }
+        
+        abacus_free(one);
+        abacus_free(r_squared);
+        abacus_free(one_minus_r_sq);
+    }
+    
+    // Step 7: For dimensions > 3, use harmonic extension with pure Abacus
+    if (dimension > 3) {
+        for (uint32_t d = 3; d < dimension; d++) {
+            (*coords)[d] = abacus_new(base);
+            if (!(*coords)[d]) {
+                for (uint32_t i = 0; i < d; i++) {
+                    abacus_free((*coords)[i]);
+                }
+                free(*coords);
+                *coords = NULL;
+                abacus_free(angle_abacus);
+                abacus_free(radius_abacus);
+                abacus_free(cos_angle);
+                abacus_free(sin_angle);
+                return MATH_ERROR_OUT_OF_MEMORY;
+            }
+            
+            // Compute harmonic phase
+            double harmonic = (d - 2);
+            CrystallineAbacus* harmonic_abacus = abacus_from_double(harmonic, base, precision);
+            CrystallineAbacus* phase = abacus_new(base);
+            abacus_mul(phase, angle_abacus, harmonic_abacus);
+            
+            // Alternate between sin and cos
+            CrystallineAbacus* trig_val = abacus_new(base);
+            if ((d - 3) % 2 == 0) {
+                err = math_sin_abacus(trig_val, phase, precision);
+            } else {
+                err = math_cos_abacus(trig_val, phase, precision);
+            }
+            
+            if (err != MATH_SUCCESS) {
+                abacus_free(harmonic_abacus);
+                abacus_free(phase);
+                abacus_free(trig_val);
+                for (uint32_t i = 0; i <= d; i++) {
+                    abacus_free((*coords)[i]);
+                }
+                free(*coords);
+                *coords = NULL;
+                abacus_free(angle_abacus);
+                abacus_free(radius_abacus);
+                abacus_free(cos_angle);
+                abacus_free(sin_angle);
+                return err;
+            }
+            
+            // Multiply by radius
+            err = abacus_mul((*coords)[d], radius_abacus, trig_val);
+            
+            abacus_free(harmonic_abacus);
+            abacus_free(phase);
+            abacus_free(trig_val);
+            
+            if (err != MATH_SUCCESS) {
+                for (uint32_t i = 0; i <= d; i++) {
+                    abacus_free((*coords)[i]);
+                }
+                free(*coords);
+                *coords = NULL;
+                abacus_free(angle_abacus);
+                abacus_free(radius_abacus);
+                abacus_free(cos_angle);
+                abacus_free(sin_angle);
+                return err;
+            }
+        }
+    }
+    
+    // Cleanup
+    abacus_free(angle_abacus);
+    abacus_free(radius_abacus);
+    abacus_free(cos_angle);
+    abacus_free(sin_angle);
+    
+    return MATH_SUCCESS;
+}

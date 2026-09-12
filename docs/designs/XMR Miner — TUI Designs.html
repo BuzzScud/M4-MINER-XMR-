@@ -1,0 +1,1393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XMR Miner TUI Directions</title>
+<style>
+  /* Same ground as RandomX-formula-lab.html / RandomX-how-its-made.html.
+     System fonts only: this file must open offline. Single dark theme on purpose:
+     the mockups are dark terminals and colors are judged against a neutral dark surround. */
+  :root{
+    --bg:#0d0e11; --bar:#111216; --card:#14151a; --sunk:#0e0f14; --raise:#181a20;
+    --line:rgba(240,238,230,.10); --line2:rgba(240,238,230,.18);
+    --ink:#f0eee6; --ink2:#c4c2b9; --muted:#84837c; --faint:#55544f;
+    --gold:#d9a441; --gold-bg:#2a2416; --teal:#26c6c0; --green:#2fbf85; --pink:#d55181;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+  button{font:inherit;color:inherit}
+  :focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 20px;
+       border-bottom:1px solid var(--line);background:var(--bar)}
+  .top h1{margin:0;font:600 15px/1.2 var(--mono);letter-spacing:-.01em}
+  .top h1 b{color:var(--gold);font-weight:600}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{font:11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);
+        border-radius:999px;padding:5px 9px;white-space:nowrap}
+  .chip em{font-style:normal;color:var(--ink2)}
+
+  .app{display:grid;grid-template-columns:272px minmax(0,1fr);min-height:calc(100vh - 50px)}
+  .rail{border-right:1px solid var(--line);padding:16px 12px 24px;display:flex;flex-direction:column;gap:8px}
+  .k{font:600 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .rail .k{margin:2px 4px 6px}
+  .pick{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;align-items:baseline;text-align:left;
+        background:transparent;border:1px solid transparent;border-radius:10px;padding:8px;cursor:pointer}
+  .pick:hover{background:var(--raise)}
+  .pick[aria-pressed="true"]{background:var(--gold-bg);border-color:rgba(217,164,65,.45)}
+  .pick canvas{grid-column:1/-1;width:100%;height:auto;border-radius:5px;display:block;
+        background:#000;box-shadow:0 0 0 1px var(--line)}
+  .pick .n{font:600 11px/1 var(--mono);color:var(--muted);padding-top:6px}
+  .pick[aria-pressed="true"] .n{color:var(--gold)}
+  .pick .nm{font:600 14px/1.2 var(--sans);padding-top:6px}
+  .pick .ln{grid-column:2;font:11px/1.3 var(--mono);color:var(--muted)}
+  .rail .hint{margin:10px 4px 0}
+
+  .lab{padding:16px 22px 40px;display:flex;flex-direction:column;gap:14px;min-width:0}
+  .controls{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+  .seg{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .seg .k{margin-right:4px}
+  .seg button{font:12px/1 var(--mono);background:var(--raise);border:1px solid var(--line);
+        color:var(--ink2);border-radius:7px;padding:7px 10px;cursor:pointer}
+  .seg button:hover{background:#1e2028;color:var(--ink)}
+  .seg button[aria-pressed="true"]{background:var(--gold-bg);border-color:rgba(217,164,65,.5);color:var(--gold)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:0}
+
+  .win{align-self:flex-start;max-width:100%;border-radius:11px;overflow:hidden;
+       box-shadow:0 0 0 1px rgba(255,255,255,.09),0 24px 60px rgba(0,0,0,.55)}
+  .tb{height:30px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#26272b;
+      border-bottom:1px solid #000;position:relative}
+  .tb i{width:12px;height:12px;border-radius:50%;background:#ff5f57}
+  .tb i:nth-child(2){background:#febc2e} .tb i:nth-child(3){background:#28c840}
+  .tb span{position:absolute;left:0;right:0;text-align:center;font:12px/30px var(--sans);
+      color:#9d9ea3;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 80px}
+  .term{padding:8px 10px;cursor:text;position:relative;outline:none}
+  .term canvas{display:block}
+  .term:focus-visible{box-shadow:inset 0 0 0 2px var(--gold)}
+  .hint{font:12px/1.5 var(--mono);color:var(--muted);margin:0}
+  .hint kbd{font:inherit;color:var(--ink2);background:var(--raise);border:1px solid var(--line);
+      border-radius:4px;padding:0 5px}
+  .live{color:var(--green)}
+
+  .notes{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:18px;margin-top:6px;
+         border-top:1px solid var(--line);padding-top:18px;max-width:1180px}
+  .notes h2{margin:0 0 4px;font:600 22px/1.2 var(--sans);letter-spacing:-.015em;text-wrap:balance}
+  .notes .lineage{font:12px/1.4 var(--mono);color:var(--gold);margin:0 0 10px}
+  .notes p{margin:0 0 12px;color:var(--ink2);max-width:62ch}
+  .moves{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+  .moves li{display:grid;grid-template-columns:13em 1fr;gap:12px;color:var(--ink2);font-size:13.5px;
+            padding-top:9px;border-top:1px solid var(--line)}
+  .moves code{font:12px/1.55 var(--mono);color:var(--ink);overflow-wrap:anywhere}
+  @media (max-width:640px){ .moves li{grid-template-columns:1fr;gap:2px} }
+  .side{display:flex;flex-direction:column;gap:14px}
+  .sw{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+  .sw div{display:grid;grid-template-columns:26px 1fr;gap:0 9px;align-items:center;background:var(--card);
+      border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+  .sw b{grid-row:1/3;width:26px;height:26px;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+  .sw span{font:11px/1.25 var(--mono);color:var(--ink)}
+  .sw small{font:10.5px/1.25 var(--mono);color:var(--muted)}
+  dl.facts{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}
+  dl.facts dt{font:600 10px/1.9 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  dl.facts dd{margin:0;color:var(--ink2)}
+
+  .compare{max-width:1180px;border-top:1px solid var(--line);padding-top:18px;margin-top:8px}
+  .compare h2{margin:0 0 10px;font:600 16px/1.2 var(--sans)}
+  .tbl{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
+  th,td{text-align:left;padding:8px 12px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{font:600 10px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  tbody th{font:600 12px/1.4 var(--mono);color:var(--muted);white-space:nowrap}
+  td{color:var(--ink2)}
+  td.on{color:var(--ink)}
+  th.on{color:var(--gold)}
+  .foot{max-width:1180px;color:var(--muted);font-size:13px;margin:6px 0 0}
+
+  @media (max-width:1080px){
+    .app{grid-template-columns:1fr}
+    .rail{border-right:0;border-bottom:1px solid var(--line);flex-direction:row;overflow-x:auto;padding:12px}
+    .rail .k,.rail .hint{display:none}
+    .pick{min-width:200px}
+    .notes{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>XMR Miner <b>TUI Directions</b></h1>
+  <div class="chips">
+    <span class="chip"><em>110 × 36</em> the size the dock launcher opens</span>
+    <span class="chip"><em>xterm-256</em> only, Terminal.app has no truecolor</span>
+    <span class="chip"><em>Menlo / SF Mono</em> cell grid</span>
+    <span class="chip">mining still starts on <em>s</em> only</span>
+  </div>
+</header>
+
+<div class="app">
+  <nav class="rail" aria-label="Design directions">
+    <div class="k">Five directions</div>
+    <div id="picks" style="display:contents"></div>
+    <p class="hint">Keys <kbd>1</kbd>–<kbd>5</kbd> switch directions when the terminal isn't focused.</p>
+  </nav>
+
+  <main class="lab">
+    <div class="controls">
+      <div class="seg" id="scen" role="group" aria-label="Miner state">
+        <span class="k">Miner</span>
+        <button data-s="stopped"><span class="dot" style="background:#84837c"></span>Stopped</button>
+        <button data-s="starting"><span class="dot" style="background:#d9a441"></span>Starting</button>
+        <button data-s="running"><span class="dot" style="background:#2fbf85"></span>Mining 16h in</button>
+      </div>
+      <div class="seg" id="scr" role="group" aria-label="Screen">
+        <span class="k">Screen</span>
+        <button data-v="home">Home</button>
+        <button data-v="palette">/ commands</button>
+        <button data-v="usage">/usage</button>
+        <button data-v="config">/config</button>
+        <button data-v="logs">/logs</button>
+      </div>
+    </div>
+
+    <div class="win">
+      <div class="tb"><i></i><i></i><i></i><span id="wtitle">XMR MINER — miner-ui.py — 110×36</span></div>
+      <div class="term" id="term" tabindex="0" role="application"
+           aria-label="Interactive terminal mockup. Type slash for commands, s to start, t to stop, escape to go back.">
+        <canvas id="cv"></canvas>
+      </div>
+    </div>
+    <p class="hint">Click the terminal and use it: <kbd>/</kbd> commands · <kbd>↑</kbd><kbd>↓</kbd> pick · <kbd>tab</kbd> complete · <kbd>enter</kbd> run · <kbd>s</kbd> start · <kbd>t</kbd> stop · <kbd>esc</kbd> back · <kbd>←</kbd><kbd>→</kbd> tabs. <span class="live">Numbers are simulated live</span> from your M4's real figures.</p>
+
+    <section class="notes" id="notes" aria-live="polite"></section>
+
+    <section class="compare">
+      <h2>Side by side</h2>
+      <div class="tbl"><table id="cmp"></table></div>
+    </section>
+    <p class="foot">Reply with a number (or "3's sidebar with 1's transcript") and I'll build it into <code>bin/miner-ui.py</code>. Nothing here touched the miner.</p>
+  </main>
+</div>
+<script>
+"use strict";
+/* ============================================================
+   Engine: a 110x36 cell grid, xterm-256 colors, a canvas painter
+   that draws box/block/braille glyphs itself (like a real terminal),
+   a miner simulation seeded from this M4's real numbers, and input.
+   ============================================================ */
+const COLS = 110, ROWS = 36;
+
+const X256 = (() => {
+  const t = ["#000000","#cd0000","#00cd00","#cdcd00","#0000ee","#cd00cd","#00cdcd","#e5e5e5",
+             "#7f7f7f","#ff0000","#00ff00","#ffff00","#5c5cff","#ff00ff","#00ffff","#ffffff"];
+  const lv = [0,95,135,175,215,255], h = v => v.toString(16).padStart(2,"0");
+  for (let r=0;r<6;r++) for (let g=0;g<6;g++) for (let b=0;b<6;b++) t.push("#"+h(lv[r])+h(lv[g])+h(lv[b]));
+  for (let i=0;i<24;i++){ const v=8+10*i; t.push("#"+h(v)+h(v)+h(v)); }
+  return t;
+})();
+
+/* ---------- cell buffer ---------- */
+class Scr {
+  constructor(){ this.ch = new Array(COLS*ROWS).fill(" "); this.st = new Array(COLS*ROWS).fill(null); }
+  _set(x,y,c,s){
+    if (x<0||y<0||x>=COLS||y>=ROWS) return;
+    const i=y*COLS+x, old=this.st[i], ns = s ? Object.assign({}, s) : {};
+    if (ns.bg===undefined && old && old.bg!=null) ns.bg = old.bg;
+    this.ch[i]=c; this.st[i]=ns;
+  }
+  put(x,y,text,s){ for (const c of String(text)){ this._set(x,y,c,s); x++; } return x; }
+  seg(x,y,parts){ for (const p of parts){ if (p) x=this.put(x,y,p[0],p[1]); } return x; }
+  right(xr,y,text,s){ const n=len(text); this.put(xr-n,y,text,s); return xr-n; }
+  segRight(xr,y,parts){ const n=parts.reduce((a,p)=>a+(p?len(p[0]):0),0); this.seg(xr-n,y,parts); return xr-n; }
+  fill(x,y,w,h,bg,ch=" "){
+    for (let j=y;j<y+h;j++) for (let i=x;i<x+w;i++){
+      if (i<0||j<0||i>=COLS||j>=ROWS) continue;
+      const k=j*COLS+i; this.ch[k]=ch; this.st[k]= bg==null ? null : {bg};
+    }
+  }
+  hl(x,y,w,c,s){ for (let i=0;i<w;i++) this._set(x+i,y,c,s); }
+  vl(x,y,h,c,s){ for (let j=0;j<h;j++) this._set(x,y+j,c,s); }
+  box(x,y,w,h,s,kind="round"){
+    const K={round:"╭╮╰╯─│",square:"┌┐└┘─│",heavy:"┏┓┗┛━┃"}[kind];
+    this._set(x,y,K[0],s); this._set(x+w-1,y,K[1],s); this._set(x,y+h-1,K[2],s); this._set(x+w-1,y+h-1,K[3],s);
+    this.hl(x+1,y,w-2,K[4],s); this.hl(x+1,y+h-1,w-2,K[4],s); this.vl(x,y+1,h-2,K[5],s); this.vl(x+w-1,y+1,h-2,K[5],s);
+  }
+  key(y){
+    let k=""; for (let x=0;x<COLS;x++){ const i=y*COLS+x, s=this.st[i];
+      k += this.ch[i] + (s ? `${s.fg??""},${s.bg??""}${s.b?"b":""}${s.i?"i":""}${s.u?"u":""}${s.inv?"v":""}` : "") + "|"; }
+    return k;
+  }
+}
+const len = t => [...String(t)].length;
+
+/* ---------- painter ---------- */
+const BOX = { // up,right,down,left : 1 light, 2 heavy
+  "─":[0,1,0,1],"━":[0,2,0,2],"│":[1,0,1,0],"┃":[2,0,2,0],"┌":[0,1,1,0],"┐":[0,0,1,1],"└":[1,1,0,0],"┘":[1,0,0,1],
+  "├":[1,1,1,0],"┤":[1,0,1,1],"┬":[0,1,1,1],"┴":[1,1,0,1],"┼":[1,1,1,1],"┏":[0,2,2,0],"┓":[0,0,2,2],"┗":[2,2,0,0],
+  "┛":[2,0,0,2],"╴":[0,0,0,1],"╶":[0,1,0,0],"╵":[1,0,0,0],"╷":[0,0,1,0],"┣":[2,2,2,0],"┫":[2,0,2,2]
+};
+const QUAD = {"▖":4,"▗":8,"▘":1,"▝":2,"▙":13,"▚":9,"▛":7,"▜":11,"▞":6,"▟":14}; // bits UL1 UR2 LL4 LR8
+const FONT_STACK = 'ui-monospace, "SF Mono", Menlo, Monaco, monospace';
+
+class Painter {
+  constructor(canvas){ this.cv=canvas; this.ctx=canvas.getContext("2d"); this.keys=new Array(ROWS).fill(""); this.wcache=new Map(); }
+  setSize(px, dpr){
+    const c=this.ctx; this.px=px; this.dpr=dpr;
+    c.font = `${px*dpr}px ${FONT_STACK}`;
+    const m = c.measureText("0");
+    const asc = m.fontBoundingBoxAscent || px*dpr*0.93, desc = m.fontBoundingBoxDescent || px*dpr*0.24;
+    this.W = Math.max(2, Math.round(m.width)); this.H = Math.max(4, Math.round(asc+desc));
+    this.base = Math.round(asc);
+    this.cv.width = this.W*COLS; this.cv.height = this.H*ROWS;
+    this.cv.style.width = (this.W*COLS/dpr)+"px"; this.cv.style.height = (this.H*ROWS/dpr)+"px";
+    this.lw = Math.max(1, Math.round(this.W/8));
+    this.keys.fill(""); this.wcache.clear(); this.fontKey=null; /* resizing a canvas resets ctx.font */
+  }
+  paint(scr, prof, force){
+    for (let y=0;y<ROWS;y++){ const k=scr.key(y); if (force || k!==this.keys[y]){ this.keys[y]=k; this.row(scr,y,prof); } }
+  }
+  row(scr,y,prof){
+    const c=this.ctx, W=this.W, H=this.H, top=y*H;
+    const defBg = prof.bg, defFg = X256[prof.fg];
+    for (let x=0;x<COLS;x++){
+      const s=scr.st[y*COLS+x]||{};
+      let bg = s.bg!=null ? X256[s.bg] : defBg, fg = s.fg!=null ? X256[s.fg] : defFg;
+      if (s.inv){ const t=bg; bg=fg; fg=t; }
+      c.fillStyle=bg; c.fillRect(x*W, top, W, H);
+    }
+    for (let x=0;x<COLS;x++){
+      const i=y*COLS+x, ch=scr.ch[i]; const s=scr.st[i]||{};
+      if (ch===" " && !s.u) continue;
+      let bg = s.bg!=null ? X256[s.bg] : defBg, fg = s.fg!=null ? X256[s.fg] : defFg;
+      if (s.inv){ fg=bg; }
+      c.fillStyle=fg; c.strokeStyle=fg;
+      const x0=x*W;
+      if (s.u) c.fillRect(x0, top+H-this.lw*2, W, this.lw);
+      if (ch===" ") continue;
+      if (this.special(ch,x0,top,fg)) continue;
+      const fk=(s.b?"b":"")+(s.i?"i":"");
+      if (fk!==this.fontKey){ c.font=`${s.i?"italic ":""}${s.b?"bold ":""}${this.px*this.dpr}px ${FONT_STACK}`; this.fontKey=fk; }
+      let w=this.wcache.get(fk+ch); if (w===undefined){ w=c.measureText(ch).width; this.wcache.set(fk+ch,w); }
+      c.textAlign="center"; c.textBaseline="alphabetic";
+      if (w > W*1.08){ c.save(); c.translate(x0+W/2, top+this.base); c.scale(W/w,1); c.fillText(ch,0,0); c.restore(); }
+      else c.fillText(ch, x0+W/2, top+this.base);
+    }
+  }
+  special(ch,x,top,fg){
+    const c=this.ctx, W=this.W, H=this.H, cp=ch.codePointAt(0);
+    if (ch==="█"){ c.fillRect(x,top,W,H); return true; }
+    if (cp>=0x2581 && cp<=0x2587){ const h=Math.round(H*(cp-0x2580)/8); c.fillRect(x,top+H-h,W,h); return true; }
+    if (cp>=0x2589 && cp<=0x258F){ const w=Math.round(W*(0x2590-cp)/8); c.fillRect(x,top,w,H); return true; }
+    if (ch==="▀"){ c.fillRect(x,top,W,Math.round(H/2)); return true; }
+    if (ch==="▐"){ const w=Math.round(W/2); c.fillRect(x+W-w,top,w,H); return true; }
+    if (ch==="▔"){ c.fillRect(x,top,W,Math.max(1,Math.round(H/8))); return true; }
+    if (ch==="▕"){ const w=Math.max(1,Math.round(W/8)); c.fillRect(x+W-w,top,w,H); return true; }
+    if (ch==="░"||ch==="▒"||ch==="▓"){ c.globalAlpha={"░":.32,"▒":.5,"▓":.72}[ch]; c.fillRect(x,top,W,H); c.globalAlpha=1; return true; }
+    if (QUAD[ch]){ const b=QUAD[ch], hw=Math.round(W/2), hh=Math.round(H/2);
+      if (b&1) c.fillRect(x,top,hw,hh); if (b&2) c.fillRect(x+hw,top,W-hw,hh);
+      if (b&4) c.fillRect(x,top+hh,hw,H-hh); if (b&8) c.fillRect(x+hw,top+hh,W-hw,H-hh); return true; }
+    if (cp>=0x2800 && cp<=0x28FF){
+      const bits=cp-0x2800, d=Math.max(1,Math.round(W*0.26)), cols=[Math.round(W*0.3-d/2), Math.round(W*0.72-d/2)];
+      const rows=[0.13,0.37,0.61,0.85].map(f=>Math.round(H*f-d/2));
+      const map=[[0,0,1],[0,1,2],[0,2,4],[1,0,8],[1,1,16],[1,2,32],[0,3,64],[1,3,128]];
+      for (const [cx,ry,m] of map) if (bits&m) c.fillRect(x+cols[cx], top+rows[ry], d, d);
+      return true;
+    }
+    const arms=BOX[ch];
+    if (arms){
+      for (let a=0;a<4;a++){ const wt=arms[a]; if (!wt) continue;
+        const lw=this.lw*wt, cx=x+Math.floor((W-lw)/2), cy=top+Math.floor((H-lw)/2);
+        if (a===0) c.fillRect(cx,top,lw,cy-top+lw);
+        if (a===2) c.fillRect(cx,cy,lw,top+H-cy);
+        if (a===3) c.fillRect(x,cy,cx-x+lw,lw);
+        if (a===1) c.fillRect(cx,cy,x+W-cx,lw);
+      }
+      return true;
+    }
+    if ("╭╮╰╯".includes(ch)){
+      const lw=this.lw, mx=x+Math.floor((W-lw)/2)+lw/2, my=top+Math.floor((H-lw)/2)+lw/2, r=W/2;
+      c.lineWidth=lw; c.beginPath();
+      if (ch==="╭"){ c.moveTo(mx,top+H); c.lineTo(mx,my+r); c.arcTo(mx,my,mx+r,my,r); c.lineTo(x+W,my); }
+      if (ch==="╮"){ c.moveTo(x,my); c.lineTo(mx-r,my); c.arcTo(mx,my,mx,my+r,r); c.lineTo(mx,top+H); }
+      if (ch==="╰"){ c.moveTo(mx,top); c.lineTo(mx,my-r); c.arcTo(mx,my,mx+r,my,r); c.lineTo(x+W,my); }
+      if (ch==="╯"){ c.moveTo(mx,top); c.lineTo(mx,my-r); c.arcTo(mx,my,mx-r,my,r); c.lineTo(x,my); }
+      c.stroke(); return true;
+    }
+    return false;
+  }
+}
+
+/* ---------- formatting ---------- */
+const fmt = n => (n==null||isNaN(n)) ? "—" : Math.round(n).toLocaleString("en-US");
+const fmtHs = n => n==null ? "—" : fmt(n)+" H/s";
+const p2 = v => String(v).padStart(2,"0");
+function fmtUp(sec){ sec=Math.max(0,Math.floor(sec)); const h=Math.floor(sec/3600), m=Math.floor(sec%3600/60), s=sec%60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; }
+function fmtClock(sec){ sec=Math.max(0,Math.floor(sec)); return `${Math.floor(sec/3600)}h ${p2(Math.floor(sec%3600/60))}m ${p2(sec%60)}s`; }
+const ago = s => s<60 ? `${s}s ago` : `${Math.floor(s/60)}m ago`;
+const clip = (t,n) => len(t)<=n ? t : [...t].slice(0,Math.max(0,n-1)).join("")+"…";
+const padR = (t,n) => t + " ".repeat(Math.max(0,n-len(t)));
+const padL = (t,n) => " ".repeat(Math.max(0,n-len(t))) + t;
+const EIGHTHS = ["","▏","▎","▍","▌","▋","▊","▉"];
+function bar(scr,x,y,w,frac,s,track,trackCh="█"){
+  frac=Math.max(0,Math.min(1,frac||0)); const e=Math.round(frac*w*8), full=Math.floor(e/8), part=e%8;
+  if (track) scr.hl(x,y,w,trackCh,track);
+  scr.hl(x,y,full,"█",s);
+  if (part && full<w) scr.put(x+full,y,EIGHTHS[part], track && trackCh==="█" ? Object.assign({},s,{bg:track.fg}) : s);
+}
+function lineBar(scr,x,y,w,frac,on,off,chOn="━",chOff="─"){
+  const n=Math.round(Math.max(0,Math.min(1,frac||0))*w); scr.hl(x,y,w,chOff,off); scr.hl(x,y,n,chOn,on);
+}
+function brailleArea(scr,x,y,w,h,vals,lo,hi,s){
+  const need=w*2, v=vals.slice(-need), off=need-v.length, dots=h*4;
+  const bits=[[0x40,0x04,0x02,0x01],[0x80,0x20,0x10,0x08]]; // from bottom dot to top dot
+  for (let cx=0;cx<w;cx++){
+    const lev=[0,1].map(k=>{ const idx=cx*2+k-off; if (idx<0) return 0;
+      return Math.max(1,Math.round((Math.max(lo,Math.min(hi,v[idx]))-lo)/(hi-lo)*dots)); });
+    for (let r=0;r<h;r++){
+      const fromBottom=(h-1-r)*4; let b=0;
+      for (let k=0;k<2;k++) for (let d=0;d<4;d++) if (fromBottom+d < lev[k]) b|=bits[k][d];
+      if (b) scr.put(x+cx,y+r,String.fromCodePoint(0x2800+b),s);
+    }
+  }
+}
+function blockArea(scr,x,y,w,h,vals,lo,hi,styleFor){
+  const v=vals.slice(-w), off=w-v.length;
+  for (let cx=0;cx<v.length;cx++){
+    const e=Math.max(1,Math.round((Math.max(lo,Math.min(hi,v[cx]))-lo)/(hi-lo)*h*8));
+    for (let r=0;r<h;r++){ const fromBottom=h-1-r, f=Math.max(0,Math.min(8,e-fromBottom*8));
+      if (f) scr.put(x+off+cx,y+r, f===8?"█":String.fromCodePoint(0x2580+f), styleFor(r,h)); }
+  }
+}
+
+/* ---------- miner simulation ---------- */
+const JOB = { algo:"rx/0", mode:"fast", threads:10, init:10, pool:"gulf.moneroocean.stream:20016",
+  host:"gulf.moneroocean.stream", port:"20016", worker:"minerv3-m4-16gb", http:"127.0.0.1:18088", donate:"0",
+  version:"6.26.0", cpu:"Apple M4", ram:"16 GB", cores:"4P + 6E", peak:4204, clang:3874,
+  path:"~/Desktop/PROJECTS/XMR MINER", plist:"com.minerv3.xmrig.plist" };
+const CMDS = [
+  ["/usage","Show status, speed, shares, pool, and machine","usage"],
+  ["/config","Show threads, mode, pool, and worker from the job file","config"],
+  ["/logs","Tail the last 40 lines of xmrig.log","logs"],
+  ["/err","Tail the last 40 lines of the error log","err"],
+  ["/open","Open this folder in Finder","open"],
+  ["/bench","Offline thread sweep (~10 min). Never starts mining","bench"],
+  ["/flex","Toggle pool algo switch (off = rx/0 only)","flex"],
+  ["/help","List commands","help"],
+  ["/quit","Quit this UI (does not stop a running miner)","quit"]];
+const ALIAS = {"/stats":"usage","/status":"usage","/plist":"config","/error":"err","/refresh":"usage"};
+const TABS = ["usage","config","logs"];
+
+let seed = 20260912;
+const rnd = () => { seed|=0; seed=seed+0x6D2B79F5|0; let t=Math.imul(seed^seed>>>15,1|seed); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; };
+const gauss = () => (rnd()+rnd()+rnd()-1.5)/0.75;
+const NOW0 = new Date(2026,8,12,12,44,10).getTime(), T0 = performance.now();
+const nowMs = () => NOW0 + (performance.now()-T0);
+const hms = ms => { const d=new Date(ms); return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; };
+const stamp = ms => { const d=new Date(ms); return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${hms(ms)}.${String(d.getMilliseconds()).padStart(3,"0")}`; };
+
+const S = {};
+function scenario(name){
+  seed = 20260912;
+  const now = nowMs();
+  Object.assign(S, { state:name, up:0, hs10:null, hs60:null, hs15:null, max:0, acc:0, rej:0, diff:125113, ping:143,
+    fails:1, height:3774912, ds:100, hist:[], shares:[], lastShare:0, jobs:[], events:[], flex:false,
+    thr:[612,604,598,609,297,293,290,296,288,291], dsMs:6620,
+    last:{ up:58080, acc:1945, rej:0, avg:4166, file:"XMR-miner-summary-2026-09-12_124410.txt", at:now-4000 } });
+  if (name==="running"){
+    S.up=58080; S.t0=now-58080*1000; S.hs10=4178; S.hs60=4062; S.hs15=4166; S.max=4201; S.acc=1945; S.lastShare=12;
+    for (let i=0;i<160;i++){ let v=4150+42*Math.sin(i/9)+gauss()*30; if (i>=118&&i<=125) v=3651+Math.abs(i-121.5)*70+gauss()*20; S.hist.push(v); }
+    S.hist[159]=4178;
+    let n=1945, t=now-12000;
+    for (let i=0;i<12;i++){ S.shares.push({n, ts:t, diff:120000+Math.floor(rnd()*11000), ms:128+Math.floor(rnd()*40)}); n--; t-=19000+rnd()*22000; }
+    S.shares[0].diff=125113; S.shares[0].ms=143;
+    S.jobs=[{ts:now-64000,h:3774912,diff:125113},{ts:now-190000,h:3774911,diff:124870}];
+    const st=now-58080*1000;
+    S.events=[{k:"user",text:"s",ts:st},{k:"start",ts:st+40},{k:"dataset",ts:st+6620},{k:"pool",ts:st+7100},
+      {k:"warn",ts:now-42000,title:"Hashrate dipped to 3,651 H/s for 8 s",sub:"macOS memory compressor was active, recovered on its own"},
+      {k:"shares"}];
+  } else if (name==="starting"){
+    S.up=4; S.t0=now-4000; S.ds=38; S.acc=0; S.fails=0;
+    S.events=[{k:"user",text:"s",ts:now-4000},{k:"start",ts:now-3960},{k:"dsprog"}];
+  } else {
+    S.events=[{k:"user",text:"t",ts:now-4200},{k:"stop",ts:now-4000},{k:"summary",ts:now-3900}];
+    for (let i=0;i<160;i++) S.hist.push(4150+42*Math.sin(i/9)+gauss()*30);
+  }
+}
+function pushEv(e){ e.ts=e.ts||nowMs(); S.events.push(e); if (S.events.length>40) S.events.splice(0,S.events.length-40); }
+function startMining(){
+  if (S.state!=="stopped"){ pushEv({k:"user",text:"s"}); pushEv({k:"note",text:"Already running."}); return; }
+  const last=S.last; scenario("starting"); S.last=last;
+  S.up=0; S.t0=nowMs(); S.ds=0; S.events=[];
+  pushEv({k:"user",text:"s"}); pushEv({k:"start"}); pushEv({k:"dsprog"});
+}
+function stopMining(){
+  if (S.state==="stopped"){ pushEv({k:"user",text:"t"}); pushEv({k:"note",text:"Not running."}); return; }
+  const d=new Date(nowMs());
+  S.last={ up:S.up, acc:S.acc, rej:S.rej, avg:S.hs15||S.hs60||S.hs10||0, at:nowMs(),
+    file:`XMR-miner-summary-${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.txt` };
+  Object.assign(S,{state:"stopped",hs10:null,hs60:null,hs15:null});
+  S.events=S.events.filter(e=>e.k!=="shares"&&e.k!=="dsprog");
+  pushEv({k:"user",text:"t"}); pushEv({k:"stop"}); pushEv({k:"summary"});
+}
+function simTick(){
+  if (S.state!=="stopped") S.up=Math.floor((nowMs()-S.t0)/1000); /* wall clock, so a hidden tab doesn't drift */
+  if (S.state==="starting"){
+    S.ds=Math.min(100,S.ds+15+rnd()*6);
+    if (S.ds>=100){
+      S.state="running"; S.dsMs=6200+Math.floor(rnd()*800); S.hs10=900;
+      S.events=S.events.filter(e=>e.k!=="dsprog");
+      pushEv({k:"dataset"}); pushEv({k:"pool"}); pushEv({k:"shares"});
+      S.jobs=[{ts:nowMs(),h:S.height,diff:16000}]; S.diff=16000;
+    }
+    return;
+  }
+  if (S.state!=="running") return;
+  const target=4160+40*Math.sin(S.up/23);
+  S.hs10 = Math.max(600, Math.min(4235, S.hs10+(target-S.hs10)*(S.hs10<3800?0.45:0.35)+gauss()*26));
+  S.hs60 = S.hs60==null ? S.hs10 : S.hs60+(S.hs10-S.hs60)/(S.up<60?Math.max(2,S.up/3):60);
+  if (S.up>=900) S.hs15 = S.hs15==null ? S.hs60 : S.hs15+(S.hs10-S.hs15)/900;
+  S.max=Math.max(S.max,S.hs10); S.hist.push(S.hs10); if (S.hist.length>200) S.hist.shift();
+  S.thr=S.thr.map((v,i)=>{ const base=i<4?606:293; return Math.round(base+(v-base)*0.6+gauss()*4); });
+  S.ping=Math.round(Math.max(118,Math.min(178,S.ping+gauss()*6)));
+  S.lastShare++;
+  if (S.up>6 && rnd()<1/9){
+    if (S.diff<100000) S.diff=Math.round(S.diff*2.1); else S.diff=120000+Math.floor(rnd()*11000);
+    const bad=rnd()<1/500; if (bad) S.rej++; else S.acc++;
+    S.shares.unshift({n:S.acc, ts:nowMs(), diff:S.diff, ms:S.ping, bad}); if (S.shares.length>12) S.shares.pop();
+    S.lastShare=0;
+  }
+  if (rnd()<1/45){ S.height++; S.jobs.unshift({ts:nowMs(),h:S.height,diff:S.diff}); if (S.jobs.length>4) S.jobs.pop(); }
+}
+const pctPeak = () => S.hs10 ? S.hs10/JOB.peak*100 : 0;
+
+/* xmrig.log tail, shaped like XMRig 6.x output */
+function logTail(n){
+  const now=nowMs(), L=[], add=(ts,mod,msg,tone)=>L.push({ts,mod,msg,tone});
+  const boot = t0 => {
+    add(t0,"net",`use pool ${JOB.pool}  TLSv1.3`,"net");
+    add(t0+80,"net",`new job from ${JOB.pool} diff 16000 algo rx/0 height ${S.height}`,"net");
+    add(t0+120,"randomx","init dataset algo rx/0 (10 threads) seed 7c1e04d9…a94d","rx");
+    add(t0+140,"randomx","allocated 2336 MB (2080+256) huge pages 0% 0/1178 +JIT (4 ms)","rx");
+  };
+  if (S.state==="starting"){
+    boot(now-S.up*1000);
+    add(now-300,"randomx",`dataset ${Math.floor(S.ds)}% · building`,"rx");
+  } else if (S.state==="running"){
+    if (S.up<400){ boot(now-S.up*1000); add(now-S.up*1000+S.dsMs,"randomx",`dataset ready (${S.dsMs} ms)`,"rx");
+      add(now-S.up*1000+S.dsMs+40,"cpu","READY threads 10/10 (10) huge pages 0% 0/10 memory 20480 KB (38 ms)","cpu"); }
+    for (const j of S.jobs) add(j.ts,"net",`new job from ${JOB.pool} diff ${j.diff} algo rx/0 height ${j.h}`,"net");
+    for (const s of S.shares) add(s.ts,"cpu",`${s.bad?"rejected":"accepted"} (${s.n}/${S.rej}) diff ${s.diff} (${s.ms} ms)`, s.bad?"bad":"ok");
+    for (let k=0;k<4;k++){ const t=now-((S.up%60)+k*60)*1000; if (now-t < S.up*1000)
+      add(t,"miner",`speed 10s/60s/15m ${(S.hs10||0).toFixed(1)} ${(S.hs60||0).toFixed(1)} ${S.hs15?S.hs15.toFixed(1):"n/a"} H/s max ${S.max.toFixed(1)} H/s`,"speed"); }
+  } else {
+    const t=S.last.at;
+    add(t-61000,"miner",`speed 10s/60s/15m 4171.4 4160.2 ${S.last.avg.toFixed(1)} H/s max 4201.3 H/s`,"speed");
+    add(t-19000,"cpu",`accepted (${S.last.acc}/${S.last.rej}) diff 125113 (143 ms)`,"ok");
+    add(t-200,"signal","Ctrl+C received, exiting","warn");
+    add(t-120,"cpu","stopped (38 ms)","cpu");
+  }
+  L.sort((a,b)=>a.ts-b.ts);
+  return L.slice(-n);
+}
+
+/* ---------- UI state + input ---------- */
+const UI = { d:0, view:"home", buf:"", sel:0, tab:0, err:false, frame:0, blink:true,
+  still: matchMedia("(prefers-reduced-motion: reduce)").matches };
+function matches(){
+  if (!UI.buf.startsWith("/")) return [];
+  const q=UI.buf.slice(1).toLowerCase(); if (!q) return CMDS.slice();
+  const a=[], b=[];
+  for (const c of CMDS){ const nm=c[0].slice(1); if (nm.startsWith(q)) a.push(c); else if (nm.includes(q)||c[1].toLowerCase().includes(q)) b.push(c); }
+  return a.concat(b);
+}
+function runAction(act, label){
+  const echo = () => pushEv({k:"user",text:label});
+  if (act==="usage"||act==="config"||act==="logs"||act==="err"){ UI.view="overlay"; UI.tab=TABS.indexOf(act==="err"?"logs":act); UI.err=act==="err"; UI.buf=""; return; }
+  UI.buf=""; UI.sel=0;
+  if (act==="help"){ UI.buf="/"; return; }
+  echo();
+  if (act==="open") pushEv({k:"note",text:`Opened ${JOB.path} in Finder.`});
+  if (act==="flex"){ S.flex=!S.flex; pushEv({k:"note",text: S.flex ? "flex ON. Next s lets the pool pick the algo (not always XMR)." : "flex OFF. Next s is rx/0 only."}); }
+  if (act==="bench") pushEv({k:"note",text: S.state!=="stopped" ? "Miner is running. Press t, then /bench again." : "Offline sweep: ~10 min, mines nothing. Type yes to run."});
+  if (act==="quit") pushEv({k:"note",text:"This would close the UI. xmrig keeps running if it was on."});
+}
+function onKey(e){
+  const k=e.key; if (e.metaKey||e.ctrlKey||e.altKey) return;
+  let handled=true;
+  if (UI.view==="overlay"){
+    if (k==="Escape"||k==="q") UI.view="home";
+    else if (k==="ArrowLeft") UI.tab=(UI.tab+2)%3;
+    else if (k==="ArrowRight"||k==="Tab") UI.tab=(UI.tab+(e.shiftKey&&k==="Tab"?2:1))%3;
+    else if (k==="1"||k==="2"||k==="3") UI.tab=+k-1;
+    else if (k==="s") startMining(); else if (k==="t") stopMining();
+    else if (k==="e" && TABS[UI.tab]==="logs") UI.err=!UI.err;
+    else handled=false;
+  } else {
+    const ms=matches();
+    if (k==="Escape"){ UI.buf=""; UI.sel=0; }
+    else if (!UI.buf && (k==="s"||k==="S")) startMining();
+    else if (!UI.buf && (k==="t"||k==="T")) stopMining();
+    else if (k==="ArrowUp"){ if (ms.length) UI.sel=(UI.sel-1+ms.length)%ms.length; }
+    else if (k==="ArrowDown"){ if (ms.length) UI.sel=(UI.sel+1)%ms.length; }
+    else if (k==="Tab"){ if (ms.length){ UI.buf=ms[Math.min(UI.sel,ms.length-1)][0]; UI.sel=0; } }
+    else if (k==="Backspace"){ UI.buf=UI.buf.slice(0,-1); UI.sel=0; }
+    else if (k==="Enter"){
+      const t=UI.buf.trim(), sel=ms[Math.min(UI.sel,ms.length-1)];
+      if (!t){ UI.buf=""; }
+      else { const exact=CMDS.find(c=>c[0]===t), act=ALIAS[t]||(exact&&exact[2])||(sel&&t.startsWith("/")&&sel[2]);
+        if (act) runAction(act, exact?exact[0]:(ALIAS[t]?t:sel[0])); else { pushEv({k:"user",text:t}); pushEv({k:"note",text:"Unknown command. Type / for commands."}); UI.buf=""; } }
+      UI.sel=0;
+    }
+    else if (k.length===1){ UI.buf+=k; UI.sel=0; }
+    else handled=false;
+  }
+  if (handled){ e.preventDefault(); UI.blink=true; }
+  return handled;
+}
+/* ============================================================
+   Shared bits for designs
+   ============================================================ */
+const DESIGNS = [];
+const sty = (fg, x) => Object.assign({fg}, x||{});
+function cursorAt(scr,x,y,ch,fg){ if (UI.blink) scr.put(x,y,ch||" ",{fg,inv:true}); }
+function paletteWindow(ms, room){
+  const n=Math.min(ms.length, room), sel=Math.min(UI.sel, Math.max(0,ms.length-1));
+  const start = ms.length>n ? Math.min(Math.max(0, sel-n+1), ms.length-n) : 0;
+  return { rows: ms.slice(start,start+n), start, sel, n };
+}
+/* newest-first activity items used by the stream-style designs */
+function activity(){
+  const out=[];
+  for (const e of S.events){
+    if (e.k==="user") out.push({ts:e.ts,kind:"user",text:e.text});
+    else if (e.k==="start") out.push({ts:e.ts,kind:"start",text:"Started xmrig from the job file",meta:"minerctl start"});
+    else if (e.k==="dataset") out.push({ts:e.ts,kind:"rx",text:`Dataset ready in ${(S.dsMs/1000).toFixed(1)}s · 2336 MB · huge pages 0/1178`,meta:"randomx"});
+    else if (e.k==="pool") out.push({ts:e.ts,kind:"net",text:`Connected to ${JOB.pool} · TLSv1.3`,meta:"net"});
+    else if (e.k==="warn") out.push({ts:e.ts,kind:"warn",text:e.title,meta:"compressor"});
+    else if (e.k==="stop") out.push({ts:e.ts,kind:"stop",text:`Stopped after ${fmtUp(S.last.up)} · ${fmt(S.last.acc)} accepted · ${S.last.rej} rejected`,meta:"minerctl stop"});
+    else if (e.k==="summary") out.push({ts:e.ts,kind:"file",text:`Summary written to ~/Desktop/${S.last.file}`,meta:"desktop"});
+    else if (e.k==="note") out.push({ts:e.ts,kind:"note",text:e.text,meta:""});
+    else if (e.k==="dsprog") out.push({ts:nowMs(),kind:"rx",text:`Building RandomX dataset · ${Math.floor(S.ds)}% of 2.0 GB`,meta:"randomx",live:true});
+  }
+  if (S.state==="running"){
+    for (const s of S.shares) out.push({ts:s.ts,kind:s.bad?"bad":"share",text:`Share ${s.bad?"rejected":"accepted"} · ${s.ms} ms`,meta:`#${fmt(s.n)} · diff ${fmt(s.diff)}`,n:s.n,diff:s.diff,ms:s.ms});
+    for (const j of S.jobs) out.push({ts:j.ts,kind:"job",text:`New job · height ${fmt(j.h)}`,meta:`diff ${fmt(j.diff)}`});
+  }
+  return out.sort((a,b)=>b.ts-a.ts);
+}
+
+/* ============================================================
+   1 · SESSION — Claude Code lineage
+   ============================================================ */
+(function(){
+  const C = { clay:173, hi:216, peri:147, ok:71, err:204, warn:179, text:252, bright:255, dim:246, faint:242, rule:238, track:236, e:137 };
+  const SPIN = ["·","✢","✳","✶","✻","✽","✻","✶","✳","✢"];
+  const VERBS = ["Hashing","Churning RandomX","Grinding scratchpads","Chasing shares","Warming the M4"];
+  const b = (t,c=C.bright) => [t, sty(c,{b:true})];
+  const t_ = (t,c=C.text) => [t, sty(c)];
+
+  function header(scr){
+    scr.put(1,1,"▗▟██▙▖",sty(C.clay)); scr.put(1,2,"█▛▚▞▜█",sty(C.clay)); scr.put(1,3,"▝▀▀▀▀▘",sty(244));
+    scr.seg(10,1,[b("XMR Miner"),t_("  v3 · XMRig "+JOB.version,C.dim)]);
+    scr.put(10,2,`RandomX ${JOB.algo} · ${JOB.threads} threads · ${JOB.mode} · ${JOB.cpu} ${JOB.ram}`,sty(C.dim));
+    scr.put(10,3,JOB.path,sty(C.dim));
+  }
+  function transcript(){
+    const L=[], gap=()=>L.push([]);
+    const dot = c => ["⏺ ",sty(c)];
+    const sub = (parts) => L.push([["  ⎿  ",sty(C.faint)], ...parts]);
+    const cont = (parts) => L.push([["     ",null], ...parts]);
+    const blink = UI.still || (UI.frame>>3)%2 ? C.clay : C.track;
+    for (const e of S.events){
+      if (e.k==="user"){ L.push([t_("> ",C.faint),t_(e.text,C.dim)]); gap(); continue; }
+      if (e.k==="start"){ L.push([dot(C.ok),b("minerctl"),t_("(start)")]);
+        sub([t_("Started. It takes about a minute to reach full speed.",C.dim)]);
+        cont([t_("caffeinate -i xmrig -a rx/0 --threads=10 --randomx-mode=fast",C.faint)]); }
+      if (e.k==="dsprog"){ const f=Math.floor(S.ds), w=40, n=Math.round(S.ds/100*w);
+        L.push([dot(blink),b("RandomX"),t_("(init dataset · 10 threads)")]);
+        sub([["█".repeat(n),sty(C.clay)],["█".repeat(w-n),sty(C.track)],t_(`  ${f}% of 2.0 GB`,C.text)]);
+        cont([t_("Keep ~3 GiB free so macOS doesn't compress the dataset.",C.faint)]); }
+      if (e.k==="dataset"){ L.push([dot(C.ok),b("RandomX"),t_("(dataset ready)")]);
+        sub([t_(`2336 MB allocated (2080 + 256) · huge pages 0/1178 · ${(S.dsMs/1000).toFixed(1)} s`,C.dim)]); }
+      if (e.k==="pool"){ L.push([dot(C.ok),b("Pool"),t_(`(${JOB.pool})`)]);
+        sub([t_(`TLSv1.3 · ${S.ping} ms · worker ${JOB.worker}`,C.dim)]); }
+      if (e.k==="warn"){ L.push([dot(C.warn),t_(e.title)]); sub([t_(e.sub,C.dim)]); }
+      if (e.k==="shares"){ const s0=S.shares[0];
+        L.push([dot(S.lastShare<2?C.ok:C.ok),b("Shares"),t_(`(${fmt(S.acc)} accepted · ${S.rej} rejected)`)]);
+        sub(s0 ? [t_(`last diff ${fmt(s0.diff)} · ${s0.ms} ms · ${ago(S.lastShare)} `,C.dim),t_("(ctrl+o to expand)",C.faint)]
+               : [t_("waiting for the first share…",C.dim)]); }
+      if (e.k==="stop"){ L.push([dot(C.text),b("minerctl"),t_("(stop)")]);
+        sub([t_(`Stopped after ${fmtUp(S.last.up)} · ${fmt(S.last.acc)} accepted · ${S.last.rej} rejected · avg ${fmt(S.last.avg)} H/s`,C.dim)]); }
+      if (e.k==="summary"){ L.push([dot(C.text),t_("Wrote the session summary to "),t_("~/Desktop/"+S.last.file,C.peri)]); }
+      if (e.k==="note"){ L.push([dot(C.text),t_(e.text)]); }
+      gap();
+    }
+    while (L.length && !L[L.length-1].length) L.pop();
+    return L;
+  }
+  function spinner(scr,y){
+    if (S.state==="stopped") return;
+    const f = UI.still ? 4 : UI.frame, word = (S.state==="starting" ? "Building dataset" : VERBS[Math.floor(S.up/9)%VERBS.length])+"…";
+    let x = scr.put(0,y,SPIN[f%SPIN.length]+" ",sty(C.clay));
+    const hi = UI.still ? -99 : (Math.floor(f/1.3)%(len(word)+10))-5;
+    [...word].forEach((ch,i)=>{ const d=Math.abs(i-hi); scr.put(x+i,y,ch,sty(d===0?231:d===1?C.hi:C.clay)); });
+    x += len(word)+1;
+    scr.put(x,y, S.state==="starting" ? `(t to cancel · ${fmtUp(S.up)} · ${Math.floor(S.ds)}% of 2.0 GB)` : `(t to stop · ${fmtUp(S.up)} · ✓ ${fmt(S.acc)})`, sty(C.faint));
+  }
+  function prompt(scr,y){
+    scr.hl(0,y,COLS,"─",sty(C.rule)); scr.hl(0,y+2,COLS,"─",sty(C.rule));
+    scr.put(0,y+1,"> ",sty(C.dim));
+    if (UI.buf){ scr.put(2,y+1,UI.buf,sty(C.bright)); cursorAt(scr,2+len(UI.buf),y+1," ",C.text); }
+    else { const ph = S.state==="stopped" ? 'Try "/usage", or press s to start' : 'Try "/usage", or press t to stop';
+      scr.put(2,y+1,ph,sty(C.faint)); cursorAt(scr,2,y+1,ph[0],C.text); }
+  }
+  function footer(scr,y){
+    const L = S.state==="running" ? [t_("⏵⏵ mining on ",C.clay),t_("(t to stop)",C.faint)]
+            : S.state==="starting" ? [t_("◐ starting ",C.warn),t_("(t to stop)",C.faint)]
+            : [t_("⏸ mining off ",C.dim),t_("(s to start) · ? for shortcuts",C.faint)];
+    scr.seg(2,y,L);
+    const R = S.state==="running" ? `${fmtHs(S.hs10)} · ${Math.round(pctPeak())}% of peak · ${S.ping} ms`
+            : S.state==="starting" ? `dataset ${Math.floor(S.ds)}% · ${JOB.threads} init threads` : `last session ${fmtUp(S.last.up)} · ${fmt(S.last.acc)} shares`;
+    scr.right(COLS-1,y,R,sty(C.faint));
+  }
+  function palette(scr,y,ms,room){
+    if (!ms.length){ scr.put(2,y,"No matching commands",sty(C.faint)); return; }
+    const w=paletteWindow(ms,room);
+    w.rows.forEach((c,i)=>{ const on=w.start+i===w.sel;
+      scr.put(2,y+i,padR(c[0],14),sty(on?C.peri:C.dim)); scr.put(16,y+i,c[1],sty(on?C.peri:C.faint)); });
+  }
+  function section(scr,y,title,note){ scr.seg(1,y,[b(title,C.text),t_(note?"  "+note:"",C.faint)]); }
+  function usage(scr,y){
+    const BW=62, RX=66, run=S.state==="running";
+    section(scr,y,"Hashrate","10s window");
+    bar(scr,1,y+1,BW, S.hs10? S.hs10/JOB.peak : 0, sty(C.clay), sty(C.track));
+    scr.put(RX,y+1, run ? `${Math.round(pctPeak())}% of peak` : S.state==="starting" ? "warming up" : "0% · miner off", sty(C.text));
+    scr.put(1,y+2, run ? `${fmtHs(S.hs10)} now · 60s ${fmt(S.hs60)} · 15m ${fmt(S.hs15)} · peak ${fmt(JOB.peak)} from the offline sweep`
+                       : `Peak ${fmt(JOB.peak)} H/s from the offline sweep at 10 threads. Hashrate is 0 until you press s.`, sty(C.dim));
+    const tot=S.acc+S.rej, q = tot ? S.acc/tot : 0;
+    section(scr,y+4,"Shares","this session");
+    bar(scr,1,y+5,BW, q, sty(C.ok), sty(C.track));
+    scr.put(RX,y+5, tot ? `${(q*100).toFixed(q===1?0:1)}% accepted` : "no shares yet", sty(C.text));
+    scr.put(1,y+6, tot ? `${fmt(S.acc)} accepted · ${S.rej} rejected · one every ~30 s at diff ${fmt(S.diff)}` : "The pool sends vardiff 16,000 first, then settles near 125k for this M4.", sty(C.dim));
+    section(scr,y+8,"Threads",`${JOB.cpu} · ${JOB.cores}`);
+    S.thr.forEach((v,i)=>{ const x=1+i*4+(i>=4?2:0);
+      const g = S.state==="running" ? "⛁" : S.state==="starting" ? "⛀" : "⛶";
+      scr.put(x,y+9,g,sty(S.state==="stopped"?240:(i<4?C.clay:C.e)));
+      scr.put(x,y+10, run ? String(v) : "—", sty(run?C.text:240)); });
+    const sum=a=>fmt(a.reduce((s,v)=>s+v,0));
+    scr.seg(46,y+9,[t_("P-cores  ",C.faint),t_(run?sum(S.thr.slice(0,4))+" H/s":"idle",C.dim)]);
+    scr.seg(46,y+10,[t_("E-cores  ",C.faint),t_(run?sum(S.thr.slice(4))+" H/s":"idle",C.dim)]);
+    section(scr,y+12,"Dataset","RandomX fast mode");
+    bar(scr,1,y+13,BW, S.state==="stopped"?0:S.ds/100, sty(C.dim), sty(C.track));
+    scr.put(RX,y+13, S.state==="stopped" ? "released" : S.ds>=100 ? "2.0 GB ready" : `${Math.floor(S.ds)}% of 2.0 GB`, sty(C.text));
+    scr.put(1,y+14,"2336 MB (2080 + 256) · huge pages 0/1178 · macOS has none, so keep ~3 GiB free", sty(C.dim));
+    section(scr,y+16,"Connection");
+    scr.put(1,y+17, `${JOB.pool} · TLS · ${S.state==="stopped"?"—":S.ping+" ms"} · ${S.fails} failure${S.fails===1?"":"s"} · worker ${JOB.worker}`, sty(C.dim));
+    section(scr,y+19,"Machine");
+    scr.put(1,y+20, `${JOB.cpu} · ${JOB.ram} · XMRig ${JOB.version} arm64 · API ${JOB.http} · uptime ${run?fmtUp(S.up):"—"}`, sty(C.dim));
+    const ins = run ? (pctPeak()>=95 ? "At the offline sweep's peak. If H/s drops, check the compressor or a second miner." : "Below peak: still warming, or cores are busy.")
+      : S.state==="starting" ? "RandomX is building the 2 GB dataset. Full speed in about a minute." : "Miner is off. Slash commands never start mining; only s does.";
+    scr.seg(1,y+22,[t_("⏺ ",C.clay),t_(ins)]);
+  }
+  function config(scr,y){
+    const rows=[["Algorithm",JOB.algo],["RandomX mode",JOB.mode],["Threads",String(JOB.threads)],["Init threads",String(JOB.init)],
+      ["Pool",JOB.pool],["Worker",JOB.worker],["HTTP API",JOB.http],["Donate level",JOB.donate+"%"],
+      ["Flex (pool picks algo)",S.flex?"on":"off"],["Job file",JOB.path+"/"+JOB.plist]];
+    rows.forEach((r,i)=>{ const on=i===0;
+      scr.put(1,y+i,on?"❯":" ",sty(C.peri)); scr.put(3,y+i,padR(r[0],26),sty(on?C.peri:C.text)); scr.put(29,y+i,r[1],sty(on?C.peri:C.dim)); });
+    scr.put(1,y+rows.length+1,"Edit the plist, then t and s to apply. Mining starts on s only.",sty(C.faint));
+  }
+  function logs(scr,y){
+    scr.seg(1,y,[b(UI.err?"xmrig.err.log":"xmrig.log",C.text),t_(`  last ${UI.err?40:24} lines · e for the ${UI.err?"main":"error"} log`,C.faint)]);
+    if (UI.err){ scr.put(1,y+2,"(empty) Nothing on stderr this session.",sty(C.dim)); return; }
+    const tone={net:C.peri,rx:C.clay,cpu:C.text,ok:C.ok,bad:C.err,speed:C.bright,warn:C.warn};
+    logTail(ROWS-y-4).forEach((l,i)=>{ scr.seg(1,y+2+i,[t_(stamp(l.ts).slice(11),C.faint),t_("  "+padR(l.mod,9),tone[l.tone]||C.dim),t_(l.msg,l.tone==="ok"||l.tone==="bad"?tone[l.tone]:C.text)]); });
+  }
+
+  DESIGNS.push({ id:"session", name:"Session", lineage:"Claude Code lineage", prof:{bg:"#141413",fg:252},
+    render(scr){
+      header(scr);
+      if (UI.view==="overlay"){
+        scr.hl(0,5,COLS,"─",sty(C.clay));
+        let x=scr.put(1,6,"Miner:",sty(C.dim))+1;
+        ["Usage","Config","Logs"].forEach((t,i)=>{ const on=i===UI.tab; x=scr.put(x+1,6,` ${t} `, on?{fg:C.clay,inv:true,b:true}:sty(C.dim)); });
+        scr.put(x+3,6,"(←/→ or tab to cycle)",sty(C.faint));
+        [usage,config,logs][UI.tab](scr,8);
+        scr.put(1,ROWS-1,"Esc to close",sty(C.faint)); scr.right(COLS-1,ROWS-1,"s start · t stop",sty(C.faint));
+        return;
+      }
+      const ms=matches(), pal=UI.buf.startsWith("/"), palRows = pal ? Math.max(1,Math.min(ms.length,9)) : 1;
+      const py = ROWS - palRows - 3, spinY = py-2, bottom = S.state==="stopped" ? py-2 : spinY-2;
+      const L = transcript(), room = bottom-5+1;
+      L.slice(-room).forEach((parts,i)=>scr.seg(0,5+i,parts));
+      spinner(scr,spinY); prompt(scr,py);
+      if (pal) palette(scr,py+3,ms,palRows); else footer(scr,ROWS-1);
+    }});
+})();
+
+/* ============================================================
+   2 · MONOLITH — Grok Build lineage
+   ============================================================ */
+(function(){
+  const W=231, T=252, M=245, F=240, R=236, E=203;
+  const GL = {
+    "0":["######","##  ##","##  ##","##  ##","##  ##","##  ##","######"],
+    "1":["  ##  ","####  ","  ##  ","  ##  ","  ##  ","  ##  ","######"],
+    "2":["######","    ##","    ##","######","##    ","##    ","######"],
+    "3":["######","    ##","    ##"," #####","    ##","    ##","######"],
+    "4":["##  ##","##  ##","##  ##","######","    ##","    ##","    ##"],
+    "5":["######","##    ","##    ","######","    ##","    ##","######"],
+    "6":["######","##    ","##    ","######","##  ##","##  ##","######"],
+    "7":["######","    ##","    ##","   ## ","  ##  ","  ##  ","  ##  "],
+    "8":["######","##  ##","##  ##","######","##  ##","##  ##","######"],
+    "9":["######","##  ##","##  ##","######","    ##","    ##","######"],
+    ",":["  ","  ","  ","  ","  ","##"," #"], "%":["##  ##","##  ##","   ## ","  ##  "," ##   ","##  ##","##  ##"],
+    "-":["      ","      ","      ","######","      ","      ","      "]
+  };
+  function big(scr,x,y,text,fg){
+    for (const ch of text){ const g=GL[ch]; if (!g) { x+=2; continue; }
+      g.forEach((row,r)=>{ [...row].forEach((p,c)=>{ if (p==="#") scr.put(x+c,y+r,"█",sty(fg)); }); });
+      x += g[0].length+1; }
+    return x;
+  }
+  const bigW = text => [...text].reduce((a,ch)=>a+(GL[ch]?GL[ch][0].length+1:2),0)-1;
+  function header(scr){
+    scr.seg(1,0,[[JOB.path,sty(M)],["  ·  "+JOB.worker,sty(F)]]);
+    const pc = S.state==="running" ? `${pctPeak().toFixed(1)}%` : S.state==="starting" ? `${Math.floor(S.ds)}%` : "0.0%";
+    scr.segRight(COLS-1,0,[[`rx/0 · ${JOB.mode} · ${JOB.threads} threads   `,sty(F)],[pc,sty(W,{b:true})]]);
+    scr.hl(0,1,COLS,"─",sty(R));
+  }
+  function tag(state){
+    if (state==="running") return ["[running]",{fg:W,inv:true,b:true}];
+    if (state==="starting") return ["[starting]", (UI.frame>>3)%2||UI.still ? {fg:W,inv:true} : sty(W)];
+    return ["[stopped]",sty(M)];
+  }
+  function hints(scr,y,pairs,rightText){
+    let x=1; pairs.forEach(([k,l],i)=>{ if (i) x=scr.put(x,y,"│",sty(R)); x=scr.put(x,y,k,sty(T)); x=scr.put(x,y,":"+l,sty(F)); });
+    if (rightText) scr.right(COLS-1,y,rightText,sty(F));
+  }
+  function home(scr){
+    const run=S.state==="running", starting=S.state==="starting";
+    const num = run ? fmt(S.hs10) : starting ? Math.floor(S.ds)+"%" : "0";
+    big(scr,2,3,num, run?W:starting?T:R);
+    const ux = 2+bigW(num)+2;
+    scr.put(ux,9, starting ? "D A T A S E T   2 . 0  G B" : "H / S", sty(run?M:F));
+    const kx=66, vx=78, rows=[
+      ["STATUS", null],
+      ["UPTIME", run||starting ? fmtClock(S.up) : `last ${fmtUp(S.last.up)}`],
+      ["SHARES", run ? `${fmt(S.acc)} ✓   ${S.rej} ✗` : starting ? "—" : `${fmt(S.last.acc)} ✓   ${S.last.rej} ✗`],
+      ["DIFF", run ? fmt(S.diff) : "—"],
+      ["PING", run ? `${S.ping} ms` : "—"],
+      ["PEAK", `${fmt(JOB.peak)} H/s · sweep`],
+      ["POOL", JOB.host]];
+    rows.forEach(([k,v],i)=>{ scr.put(kx,3+i,k,sty(F));
+      if (k==="STATUS"){ const [t,s]=tag(S.state); scr.put(vx,3,t,s); } else scr.put(vx,3+i,v,sty(run||k==="PEAK"||k==="POOL"?T:M)); });
+    // chart
+    const lo=3600, hi=4250;
+    scr.put(1,11, run ? "hashrate · last 100 s" : "last session · hashrate", sty(F));
+    scr.right(COLS-1,11, run ? `max ${fmt(S.max)} · 60s ${fmt(S.hs60)}` : `avg ${fmt(S.last.avg)} H/s`, sty(F));
+    if (S.hist.length) blockArea(scr,1,12,102,5,S.hist,lo,hi,(r)=>sty(run?[W,254,251,248,245][r]:[R,R,235,235,234][r]));
+    scr.hl(1,17,102,"─",sty(R));
+    scr.put(104,12,"4.25k",sty(F)); scr.put(104,16,"3.6k",sty(F));
+    // stream or palette
+    const top=19, bottom=30;
+    if (UI.buf.startsWith("/")){
+      const ms=matches(); scr.put(1,top,"COMMANDS",sty(F)); scr.right(COLS-1,top,"↑↓ move · tab complete · enter run",sty(F));
+      if (!ms.length) scr.put(3,top+2,"no match",sty(M));
+      const w=paletteWindow(ms,bottom-top-1);
+      w.rows.forEach((c,i)=>{ const on=w.start+i===w.sel, y=top+2+i;
+        if (on){ scr.fill(1,y,COLS-2,1,255); scr.seg(1,y,[["› "+padR(c[0],13),{fg:16,bg:255,b:true}],[c[1],{fg:16,bg:255}]]); }
+        else scr.seg(1,y,[["  "+padR(c[0],13),sty(T)],[c[1],sty(F)]]); });
+    } else {
+      const items=activity().slice(0,bottom-top+1), shade=[W,252,249,246,244,243,242,241,240,240,240,240];
+      items.forEach((it,i)=>{ const y=top+i, c=shade[i]||F;
+        if (it.kind==="user"){ scr.seg(1,y,[["❯ ",sty(c)],[it.text,sty(c)]]); }
+        else { scr.seg(1,y,[["◆ ",sty(it.kind==="bad"?E:c)],[it.text,sty(it.kind==="warn"&&i<3?W:c,{b:it.kind==="warn"&&i<3})]]); }
+        scr.segRight(COLS-1,y,[[it.meta||"",sty(F)],["   "+hms(it.ts),sty(F)]]);
+      });
+    }
+    // prompt
+    scr.hl(0,32,COLS,"─",sty(R)); scr.hl(0,34,COLS,"─",sty(R));
+    scr.put(1,33,"❯",sty(W,{b:true}));
+    if (UI.buf){ scr.put(3,33,UI.buf,sty(W)); cursorAt(scr,3+len(UI.buf),33," ",W); }
+    else { const ph = run ? "type / for commands · t stops mining" : "type / for commands · s starts mining"; scr.put(3,33,ph,sty(F)); cursorAt(scr,3,33,ph[0],W); }
+    hints(scr,35,[["Enter","run"],["/","commands"],["s","start"],["t","stop"],["Tab","usage"],["Ctrl+C","quit"]],
+      run ? `[uptime: ${fmtUp(S.up)}, ↑${fmt(S.acc)}]` : starting ? `[dataset: ${Math.floor(S.ds)}%]` : "[idle]");
+  }
+  function overlay(scr){
+    let x=1; ["USAGE","CONFIG","LOGS"].forEach((t,i)=>{ const on=i===UI.tab; x=scr.put(x,3,` ${t} `, on?{fg:W,inv:true,b:true}:sty(M))+2; });
+    scr.right(COLS-1,3,"←→:switch │ e:error log │ Esc:close",sty(F));
+    const run=S.state==="running", tab=TABS[UI.tab], L=1, Rx=58;
+    const K=(xx,y,t)=>scr.put(xx,y,t.split("").join(" "),sty(F));
+    if (tab==="usage"){
+      K(L,5,"HASHRATE"); K(Rx,5,"SHARES");
+      scr.put(L,6, run?fmtHs(S.hs10):S.state==="starting"?"warming up":"0 H/s", sty(W,{b:true}));
+      scr.put(Rx,6, `${fmt(S.acc)} accepted · ${S.rej} rejected`, sty(W,{b:true}));
+      lineBar(scr,L,7,52,S.hs10?S.hs10/JOB.peak:0,sty(W),sty(R)); lineBar(scr,Rx,7,51,S.acc?S.acc/(S.acc+S.rej):0,sty(W),sty(R));
+      scr.put(L,8, `${Math.round(pctPeak())}% of ${fmt(JOB.peak)} H/s peak (offline sweep)`, sty(M));
+      scr.put(Rx,8, S.acc ? `${(S.acc/(S.acc+S.rej)*100).toFixed(1)}% accepted · one every ~30 s` : "no shares yet", sty(M));
+      K(L,10,"WINDOWS"); K(Rx,10,"CONNECTION");
+      [["10s",S.hs10],["60s",S.hs60],["15m",S.hs15],["max",S.max||null]].forEach(([k,v],i)=>{ scr.put(L,11+i,k,sty(M)); scr.put(L+8,11+i,fmtHs(v),sty(v?T:F)); });
+      [["pool",JOB.pool],["ping",run?S.ping+" ms":"—"],["fails",String(S.fails)],["worker",JOB.worker]].forEach(([k,v],i)=>{ scr.put(Rx,11+i,k,sty(M)); scr.put(Rx+10,11+i,v,sty(T)); });
+      K(L,16,"THREADS"); scr.put(L+16,16,JOB.cores,sty(M)); K(Rx,16,"MACHINE");
+      S.thr.forEach((v,i)=>{ const x=L+i*5+(i>=4?2:0), lev=run?v/650:0.02;
+        blockArea(scr,x,17,1,4,[lev*650],0,650,()=>sty(i<4?W:246)); blockArea(scr,x+1,17,1,4,[lev*650],0,650,()=>sty(i<4?W:246));
+        scr.put(x,21,i<4?"P":"E",sty(F)); scr.put(x,22,run?String(v):"—",sty(run?M:F)); });
+      [["cpu",`${JOB.cpu} · ${JOB.ram} · ${JOB.cores}`],["hugepages","0/1178 · macOS has none"],["version",`XMRig ${JOB.version} arm64`],["api",JOB.http],["flex",S.flex?"on":"off · rx/0 only"]]
+        .forEach(([k,v],i)=>{ scr.put(Rx,17+i,k,sty(M)); scr.put(Rx+10,17+i,v,sty(T)); });
+      K(L,25,"SESSION");
+      scr.put(L,26, run ? `uptime ${fmtClock(S.up)} · started ${hms(nowMs()-S.up*1000)} · dataset ready in ${(S.dsMs/1000).toFixed(1)}s` : `last session ${fmtUp(S.last.up)} · summary ~/Desktop/${S.last.file}`, sty(T));
+      scr.put(L,28, run ? (pctPeak()>=95?"◆ At the sweep's peak. If H/s drops: compressor or a second miner, not the hash.":"◆ Below peak. Still warming, or cores are busy.") : "◆ Miner is off. Only s starts mining.", sty(W));
+    } else if (tab==="config"){
+      K(L,5,"JOB FILE"); scr.put(L+18,5,JOB.plist,sty(F));
+      [["algo",JOB.algo],["mode",JOB.mode],["threads",String(JOB.threads)],["init",String(JOB.init)],["pool",JOB.pool],["worker",JOB.worker],["http",JOB.http],["donate",JOB.donate+"%"],["flex",S.flex?"on":"off"],["cwd",JOB.path]]
+        .forEach(([k,v],i)=>{ scr.put(L,7+i*2,padR(k,10),sty(M)); scr.put(L+12,7+i*2,v,sty(W,{b:i<3})); scr.hl(L,8+i*2,70,"─",sty(234)); });
+      scr.put(L,28,"◆ Edit the plist, then t and s to apply.",sty(T));
+    } else {
+      K(L,5,UI.err?"XMRIG.ERR.LOG":"XMRIG.LOG");
+      if (UI.err) scr.put(L,7,"(empty)",sty(M));
+      else logTail(25).forEach((l,i)=>scr.seg(L,7+i,[[stamp(l.ts).slice(11,19)+"  ",sty(F)],[padR(l.mod,9),sty(M)],[l.msg,sty(l.tone==="ok"?W:l.tone==="bad"?E:T,{b:l.tone==="ok"})]]));
+    }
+    hints(scr,35,[["s","start"],["t","stop"],["←→","tabs"],["Esc","close"]], run?`[uptime: ${fmtUp(S.up)}, ↑${fmt(S.acc)}]`:"[idle]");
+  }
+  DESIGNS.push({ id:"monolith", name:"Monolith", lineage:"Grok Build lineage", prof:{bg:"#000000",fg:252},
+    render(scr){ header(scr); if (UI.view==="overlay") overlay(scr); else home(scr); } });
+})();
+/* ============================================================
+   3 · COCKPIT — OpenCode lineage (paints every cell)
+   ============================================================ */
+(function(){
+  const BG=234, SB=235, IN=236, DG=237, V=141, A=116, G=114, Y=215, RR=203, T=252, M=244, F=239, H=255, LB=243;
+  const LW=76, SX=78, SW=30;
+  const pill = (t,fg) => [" "+padR(t,7)+" ", {fg, bg:IN}];
+  const KIND = { share:["share",G], bad:["share",RR], job:["job",A], net:["net",A], rx:["randomx",V], warn:["warn",Y],
+    start:["miner",H], stop:["miner",H], file:["file",M], user:["you",V], note:["info",M] };
+  let perMin=null;
+  function minuteBins(){
+    if (!perMin){ perMin=[]; for (let i=0;i<30;i++) perMin.push(1+Math.floor(rnd()*3.2)); }
+    return perMin;
+  }
+  function sidebar(scr){
+    scr.fill(76,0,34,ROWS,SB);
+    const run=S.state==="running", starting=S.state==="starting";
+    const L=(y,t)=>scr.put(SX,y,t,sty(LB,{b:true}));
+    scr.put(SX,1,"Session",sty(H,{b:true})); scr.right(SX+SW,1, run?"live":starting?"warming":"idle", sty(run?G:starting?Y:M));
+    scr.put(SX,2, run||starting ? `started ${hms(nowMs()-S.up*1000)} · ${fmtUp(S.up)}` : `last ran ${fmtUp(S.last.up)}`, sty(M));
+    L(4,"HASHRATE");
+    scr.put(SX,5, run?fmtHs(S.hs10):starting?"warming up":"idle", sty(run?H:M,{b:run}));
+    if (run) scr.right(SX+SW,5,`▲ ${Math.round(pctPeak())}%`,sty(pctPeak()>=95?G:Y));
+    if (S.hist.length) brailleArea(scr,SX,6,SW,4,S.hist,3600,4250,sty(run?A:F));
+    else scr.hl(SX,9,SW,"⣀",sty(F));
+    scr.put(SX,10, run?`60s ${fmt(S.hs60)} · 15m ${fmt(S.hs15)}`:`peak ${fmt(JOB.peak)} H/s (sweep)`, sty(M));
+    L(12,"SHARES");
+    scr.seg(SX,13, run ? [[fmt(S.acc)+" ✓",sty(G,{b:true})],["  "+S.rej+" ✗",sty(S.rej?RR:M)]] : [["—",sty(M)]]);
+    if (run) scr.right(SX+SW,13,`diff ${Math.round(S.diff/1000)}k`,sty(M));
+    const bins=minuteBins();
+    bins.forEach((n,i)=>{ const on=run; scr.put(SX+i,14, on?["▁","▃","▅","▆","█"][Math.min(4,n)]:"▁", sty(on?(n?G:F):F)); });
+    scr.put(SX,15, run?"per minute · last 30 min":"no shares while stopped", sty(F));
+    L(17,"THREADS"); scr.right(SX+SW,17,JOB.cores,sty(M));
+    const row=(y,lab,vals,col)=>{ scr.put(SX,y,lab,sty(M));
+      vals.forEach((v,i)=>scr.put(SX+2+i,y, run?(["▁","▂","▃","▄","▅","▆","▇","█"][Math.max(0,Math.min(7,Math.round(v/650*8)-1))]):"▁", sty(run?col:F)));
+      scr.right(SX+SW,y, run?`${fmt(vals.reduce((a,v)=>a+v,0))} H/s`:"—", sty(run?T:F)); };
+    row(18,"P",S.thr.slice(0,4),V); row(19,"E",S.thr.slice(4),A);
+    L(21,"POOL");
+    scr.put(SX,22,JOB.host,sty(T)); scr.put(SX,23,`:${JOB.port} · TLS · ${run?S.ping+" ms":"—"}`,sty(M));
+    scr.put(SX,24,`${S.fails} failure · ${JOB.worker}`,sty(M));
+    L(26,"MACHINE");
+    scr.put(SX,27,`${JOB.cpu} · ${JOB.ram}`,sty(T)); scr.put(SX,28,"huge pages 0/1178",sty(M)); scr.put(SX,29,`XMRig ${JOB.version} arm64`,sty(M));
+    L(31,"DATASET");
+    const dsf = S.state==="stopped"?0:S.ds/100;
+    bar(scr,SX,32,20,dsf,sty(run?V:Y),sty(IN));
+    scr.right(SX+SW,32, S.state==="stopped"?"released":dsf>=1?"2.0 GB":`${Math.floor(S.ds)}%`, sty(T));
+    scr.put(SX,34,clip(JOB.path,SW),sty(F));
+  }
+  function topbar(scr){
+    scr.seg(1,0,[["◈ ",sty(V)],["XMR Miner",sty(H,{b:true})],["  "+JOB.worker,sty(M)]]);
+    scr.right(LW-2,0,"ctrl+p commands",sty(F));
+  }
+  function feed(scr,y0,y1){
+    const items=activity().slice(0,y1-y0+1).reverse();
+    const top = y1-items.length+1;
+    items.forEach((it,i)=>{ const y=top+i, [tg,col]=KIND[it.kind]||["info",M];
+      scr.put(1,y,hms(it.ts),sty(F)); scr.put(10,y,pill(tg,col)[0],pill(tg,col)[1]);
+      const text = it.kind==="user" ? it.text : it.text;
+      scr.put(21,y,clip(text,LW-24-len(it.meta||"")),sty(it.kind==="user"?V:it.kind==="warn"?Y:T));
+      if (it.meta) scr.right(LW-2,y,it.meta,sty(M)); });
+  }
+  function input(scr){
+    scr.fill(0,30,LW,4,IN); scr.vl(0,30,4,"┃",sty(V));
+    if (UI.buf){ scr.put(3,31,UI.buf,sty(H)); cursorAt(scr,3+len(UI.buf),31," ",H); }
+    else { const ph = S.state==="stopped" ? "Type / for commands, or press s to start mining" : "Type / for commands, or press t to stop"; scr.put(3,31,ph,sty(M)); cursorAt(scr,3,31,ph[0],H); }
+    const md = S.state==="running" ? [" MINING ",G] : S.state==="starting" ? [" WARMING ",Y] : [" IDLE ",M];
+    scr.put(3,33,md[0],{fg:16,bg:md[1],b:true});
+    scr.put(4+len(md[0]),33,`${JOB.algo} · ${JOB.mode} · ${JOB.threads} threads`,sty(T));
+    scr.right(LW-2,33, S.flex?"flex on":"rx/0 only", sty(M));
+  }
+  function keys(scr,y,list){ let x=1; list.forEach(([k,l])=>{ x=scr.put(x,y,k,sty(T,{b:true}))+1; x=scr.put(x,y,l,sty(M))+3; }); }
+  function dialog(scr){
+    const ms=matches(), n=Math.max(1,Math.min(ms.length,9)), w=58, h=n+5, x=9, y=6;
+    for (let yy=0;yy<ROWS-1;yy++) for (let xx=0;xx<LW;xx++){ const k=yy*COLS+xx, s0=scr.st[k]; /* scrim: dim the pane behind */
+      if (s0 && scr.ch[k]!==" ") scr.st[k]=Object.assign({},s0,{fg:s0.bg===G||s0.bg===Y||s0.bg===M?s0.fg:240,b:false}); }
+    scr.fill(x+2,y+1,w,h,232); scr.fill(x,y,w,h,DG);
+    scr.put(x+2,y+1,"Commands",sty(H,{b:true})); scr.right(x+w-2,y+1,"esc",sty(M));
+    scr.seg(x+2,y+2,[["> ",sty(V)],[UI.buf,sty(H)]]); cursorAt(scr,x+4+len(UI.buf),y+2," ",H);
+    if (!ms.length) scr.put(x+2,y+4,"No matching commands",sty(M));
+    const pw=paletteWindow(ms,n);
+    pw.rows.forEach((c,i)=>{ const on=pw.start+i===pw.sel, yy=y+4+i;
+      if (on) scr.fill(x+1,yy,w-2,1,V);
+      scr.put(x+2,yy,padR(c[0],10),on?{fg:16,b:true}:sty(H)); scr.put(x+13,yy,clip(c[1],w-15),on?{fg:16}:sty(M)); });
+  }
+  function tabs(scr){
+    let x=1; ["Usage","Config","Logs"].forEach((t,i)=>{ const on=i===UI.tab;
+      if (on){ scr.fill(x,1,len(t)+2,1,DG); scr.put(x+1,1,t,sty(H,{b:true})); scr.hl(x,2,len(t)+2,"▀",sty(V)); }
+      else scr.put(x+1,1,t,sty(M));
+      x+=len(t)+3; });
+    scr.right(LW-2,1,"←→ tabs · esc back",sty(F));
+  }
+  function usage(scr){
+    const run=S.state==="running", tot=S.acc+S.rej;
+    const card=(x,title,big,unit,l1,c1,l2)=>{ scr.fill(x,4,24,6,SB); scr.put(x+2,4,title,sty(LB,{b:true}));
+      const ex=scr.put(x+2,6,big,sty(H,{b:true})); scr.put(ex+1,6,unit,sty(M)); scr.put(x+2,7,l1,sty(c1)); scr.put(x+2,8,l2,sty(M)); };
+    card(1,"HASHRATE",run?fmt(S.hs10):"0","H/s",run?`${Math.round(pctPeak())}% of peak`:"miner off",run?G:M,`peak ${fmt(JOB.peak)} · sweep`);
+    card(26,"SHARES",fmt(S.acc),"✓",tot?`${(S.acc/tot*100).toFixed(1)}% accepted`:"none yet",tot?G:M,`${S.rej} rejected · diff ${Math.round(S.diff/1000)}k`);
+    card(51,"UPTIME",run?fmtUp(S.up):"—","",run?`since ${hms(nowMs()-S.up*1000)}`:"not running",run?A:M,`${S.fails} pool failure · ${S.ping} ms`);
+    scr.put(1,11,"HASHRATE · LAST 2 MIN",sty(LB,{b:true})); scr.right(LW-2,11,`10s ${fmt(S.hs10)}  60s ${fmt(S.hs60)}  15m ${fmt(S.hs15)}`,sty(M));
+    ["4.25k","","","3.9k","","","","3.6k"].forEach((t,i)=>scr.put(0,12+i,t,sty(F)));
+    scr.hl(6,19,60,"⣀",sty(IN));
+    if (S.hist.length) brailleArea(scr,6,12,60,8,S.hist,3600,4250,sty(run?A:F));
+    scr.put(1,21,"THREADS",sty(LB,{b:true})); scr.right(LW-2,21,`${JOB.cpu} · ${JOB.cores}`,sty(M));
+    S.thr.forEach((v,i)=>{ const y=22+i;
+      scr.put(1,y,(i<4?"P":"E")+i,sty(M)); bar(scr,5,y,52,run?v/650:0,sty(i<4?V:A),sty(IN));
+      scr.put(59,y, run?`${v} H/s`:"—", sty(run?T:F)); });
+  }
+  function config(scr){
+    const rows=[["algo",JOB.algo],["mode",JOB.mode],["threads",String(JOB.threads)],["init threads",String(JOB.init)],["pool",JOB.pool],
+      ["worker",JOB.worker],["http api",JOB.http],["donate",JOB.donate+"%"],["flex",S.flex?"on (pool picks algo)":"off (rx/0 only)"],["job file",JOB.plist],["folder",JOB.path]];
+    rows.forEach(([k,v],i)=>{ const y=4+i*2; scr.fill(1,y,LW-3,1,i%2?BG:SB); scr.put(3,y,padR(k,16),sty(M)); scr.put(20,y,v,sty(H)); });
+    scr.seg(1,27,[["ⓘ ",sty(A)],["Edit the plist, then t and s to apply. Mining starts on s only.",sty(T)]]);
+  }
+  function logs(scr){
+    scr.seg(1,4,[[UI.err?"xmrig.err.log":"xmrig.log",sty(H,{b:true})],["   e switches log",sty(M)]]);
+    if (UI.err){ scr.put(1,6,"(empty) nothing on stderr",sty(M)); return; }
+    const tone={net:["net",A],rx:["randomx",V],cpu:["cpu",T],ok:["share",G],bad:["share",RR],speed:["speed",H],warn:["signal",Y]};
+    logTail(26).forEach((l,i)=>{ const [tg,col]=tone[l.tone]||["log",M], y=6+i;
+      scr.put(1,y,stamp(l.ts).slice(11,19),sty(F)); scr.put(10,y,pill(tg,col)[0],pill(tg,col)[1]); scr.put(21,y,clip(l.msg,LW-23),sty(T)); });
+  }
+  DESIGNS.push({ id:"cockpit", name:"Cockpit", lineage:"OpenCode lineage", prof:{bg:X256[BG],fg:252},
+    render(scr){
+      scr.fill(0,0,COLS,ROWS,BG);
+      sidebar(scr); topbar(scr);
+      if (UI.view==="overlay"){ tabs(scr); [usage,config,logs][UI.tab](scr);
+        keys(scr,35,[["esc","back"],["←→","tabs"],["s","start"],["t","stop"],["e","error log"]]); return; }
+      feed(scr,2,28); input(scr);
+      keys(scr,35,[["s","start"],["t","stop"],["/","commands"],["esc","back"],["ctrl+c","quit"]]);
+      if (UI.buf.startsWith("/")) dialog(scr);
+    }});
+})();
+
+/* ============================================================
+   4 · LEDGER — Codex CLI lineage (inline, scrollback-first)
+   ============================================================ */
+(function(){
+  const I=253, D=244, F=240, CY=80, G=114, RR=210, Y=179, BAND=236;
+  const t_=(t,c=I,x)=>[t,sty(c,x)];
+  function header(scr){
+    scr.box(0,1,66,7,sty(F));
+    scr.seg(2,2,[t_(">_ ",CY,{b:true}),t_("XMR Miner",I,{b:true}),t_(` (XMRig ${JOB.version})`,D)]);
+    scr.seg(2,4,[t_("job:     ",D),t_(`${JOB.algo} ${JOB.mode} · ${JOB.threads} threads`),t_("     /config to view",D)]);
+    scr.seg(2,5,[t_("pool:    ",D),t_(JOB.pool)]);
+    scr.seg(2,6,[t_("folder:  ",D),t_(JOB.path)]);
+  }
+  function lines(){
+    const L=[], gap=()=>L.push({parts:[]});
+    const bullet=(parts,c=D)=>L.push({parts:[t_("• ",c),...parts]});
+    const tree=(parts,first=true)=>L.push({parts:[t_(first?"  └ ":"    ",D),...parts]});
+    for (const e of S.events){
+      if (e.k==="user"){ L.push({band:true,parts:[t_(" › ",D),t_(e.text)]}); gap(); continue; }
+      if (e.k==="start"){ bullet([t_("Started xmrig",I,{b:true})]); tree([t_("caffeinate -i xmrig -a rx/0 --threads=10 --randomx-mode=fast",D)]); }
+      if (e.k==="dsprog"){ const w=30, n=Math.round(S.ds/100*w);
+        bullet([t_("Building the RandomX dataset",I,{b:true})]);
+        tree([t_(`${padL(String(Math.floor(S.ds)),3)}% of 2.0 GB  `,I),t_("[",D),["█".repeat(n),sty(CY)],["░".repeat(w-n),sty(D)],t_("]",D)]); }
+      if (e.k==="dataset"){ bullet([t_("Dataset ready",I,{b:true}),t_(` in ${(S.dsMs/1000).toFixed(1)} s`)]); tree([t_("2336 MB (2080 + 256) · huge pages 0/1178",D)]); }
+      if (e.k==="pool"){ bullet([t_("Connected",I,{b:true}),t_(" to "+JOB.pool)]); tree([t_(`TLSv1.3 · worker ${JOB.worker}`,D)]); }
+      if (e.k==="warn"){ bullet([t_(e.title,Y)],Y); tree([t_(e.sub,D)]); }
+      if (e.k==="shares"){
+        bullet([t_("Shares",I,{b:true}),t_("  "),t_(fmt(S.acc),G,{b:true}),t_(" accepted · "),t_(String(S.rej),S.rej?RR:I),t_(" rejected")]);
+        const rows=S.shares.slice(0,4);
+        if (!rows.length) tree([t_("waiting for the first share…",D)]);
+        rows.forEach((s,i)=>tree([t_(padR("#"+fmt(s.n),8),D),t_(hms(s.ts)+"   ",D),t_("diff "+padL(fmt(s.diff),7)+"   ",I),t_(padL(s.ms+" ms",6)+"   ",D),t_(s.bad?"✗":"✓",s.bad?RR:G)],i===0));
+      }
+      if (e.k==="stop"){ bullet([t_("Stopped",I,{b:true}),t_(` after ${fmtUp(S.last.up)}`)]);
+        tree([t_(fmt(S.last.acc),G),t_(` accepted · ${S.last.rej} rejected · avg ${fmt(S.last.avg)} H/s`,D)]); }
+      if (e.k==="summary"){ bullet([t_("Wrote "),t_("~/Desktop/"+S.last.file,CY,{u:true})]); }
+      if (e.k==="note"){ bullet([t_(e.text)]); }
+      gap();
+    }
+    while (L.length && !L[L.length-1].parts.length) L.pop();
+    return L;
+  }
+  function draw(scr,L,y0,y1){
+    const view=L.slice(-(y1-y0+1));
+    view.forEach((ln,i)=>{ const y=y0+i; if (ln.band) scr.fill(0,y,COLS,1,BAND); scr.seg(0,y,ln.parts); });
+  }
+  function card(title){
+    const L=[], run=S.state==="running", tot=S.acc+S.rej;
+    const kv=(k,parts)=>L.push([t_("  "+padR(k+":",13),D),...parts]);
+    const br=(f,w,c)=>{ const n=Math.round(Math.max(0,Math.min(1,f))*w); return [t_("[",D),["█".repeat(n),sty(c)],["░".repeat(w-n),sty(F)],t_("]",D)]; };
+    if (title==="usage"){
+      kv("Hashrate",[t_(padR(run?fmtHs(S.hs10):"0 H/s",11)),...br(S.hs10?S.hs10/JOB.peak:0,28,CY),t_(`  ${Math.round(pctPeak())}% of peak`,D)]);
+      kv("Windows",[t_(`10s ${fmt(S.hs10)} · 60s ${fmt(S.hs60)} · 15m ${fmt(S.hs15)} · max ${fmt(S.max||null)}`,run?I:D)]);
+      kv("Shares",[t_(padR(fmt(S.acc)+" ✓",11),G),...br(tot?S.acc/tot:0,28,G),t_(`  ${S.rej} rejected`,D)]);
+      kv("Cadence",[t_(run?`one every ~30 s at diff ${fmt(S.diff)}`:"—",run?I:D)]);
+      L.push([]);
+      kv("Threads",[t_("P ",D),t_(S.thr.slice(0,4).join(" "),run?I:D),t_("  E ",D),t_(S.thr.slice(4).join(" "),run?I:D)]);
+      kv("Dataset",[t_(S.state==="stopped"?"released":S.ds>=100?"2.0 GB ready":`${Math.floor(S.ds)}% of 2.0 GB`),t_(" · huge pages 0/1178",D)]);
+      kv("Pool",[t_(JOB.pool),t_(` · ${run?S.ping+" ms":"—"} · ${S.fails} failure`,D)]);
+      kv("Machine",[t_(`${JOB.cpu} · ${JOB.ram} · XMRig ${JOB.version} arm64`)]);
+      kv("Uptime",[t_(run?fmtClock(S.up):"not running")]);
+    } else if (title==="config"){
+      [["Algorithm",JOB.algo],["Mode",JOB.mode],["Threads",String(JOB.threads)],["Init",String(JOB.init)],["Pool",JOB.pool],["Worker",JOB.worker],
+       ["HTTP API",JOB.http],["Donate",JOB.donate+"%"],["Flex",S.flex?"on":"off"],["Job file",JOB.plist]].forEach(([k,v])=>kv(k,[t_(v)]));
+      L.push([]); L.push([t_("  Edit the plist, then t and s to apply.",D)]);
+    }
+    return L;
+  }
+  function overlay(scr){
+    const tab=TABS[UI.tab];
+    scr.fill(0,9,COLS,1,BAND); scr.seg(0,9,[t_(" › ",D),t_("/"+(tab==="logs"&&UI.err?"err":tab))]);
+    if (tab==="logs"){
+      scr.seg(0,11,[t_("• ",D),t_("Ran",I,{b:true}),t_(` tail -n 20 logs/${UI.err?"xmrig.err.log":"xmrig.log"}`)]);
+      if (UI.err) scr.put(0,12,"  └ (no output)",sty(D));
+      else logTail(19).forEach((l,i)=>scr.seg(0,12+i,[t_(i?"    ":"  └ ",D),t_(`[${stamp(l.ts)}]  ${padR(l.mod,8)} `,F),t_(l.msg,l.tone==="ok"?G:l.tone==="bad"?RR:D)]));
+    } else {
+      const body=card(tab), w=86;
+      scr.box(0,11,w,body.length+4,sty(F));
+      scr.seg(2,12,[t_(">_ ",CY,{b:true}),t_("XMR Miner",I,{b:true}),t_(" · "+tab,D)]);
+      scr.right(w-2,12,"←/→ usage · config · logs",sty(F));
+      body.forEach((parts,i)=>scr.seg(1,14+i,parts));
+    }
+  }
+  function status(scr,y){
+    if (S.state==="stopped") return;
+    const word = S.state==="starting" ? "Building dataset" : "Mining", f=UI.still?0:UI.frame;
+    scr.put(0,y,(f>>3)%2?"•":"◦",sty(D));
+    const hi = UI.still ? -99 : (Math.floor(f/1.5)%(len(word)+8))-4;
+    [...word].forEach((ch,i)=>{ const d=Math.abs(i-hi); scr.put(2+i,y,ch,sty(d===0?231:d===1?250:D,{b:d<=1})); });
+    scr.put(3+len(word),y, S.state==="starting" ? `(${fmtUp(S.up)} • t to cancel)` : `(${fmtClock(S.up)} • t to stop)`, sty(D));
+  }
+  DESIGNS.push({ id:"ledger", name:"Ledger", lineage:"Codex CLI lineage", prof:{bg:"#0f1115",fg:253},
+    render(scr){
+      header(scr);
+      const pal=UI.buf.startsWith("/") && UI.view!=="overlay", ms=matches(), pn=pal?Math.max(1,Math.min(ms.length,9)):0;
+      if (UI.view==="overlay") overlay(scr);
+      else draw(scr,lines(),9,(pal?31-pn:S.state==="stopped"?31:29));
+      if (pal){
+        if (!ms.length) scr.put(2,31,"no matching commands",sty(D));
+        const w=paletteWindow(ms,pn);
+        w.rows.forEach((c,i)=>{ const on=w.start+i===w.sel, y=31-pn+1+i;
+          scr.seg(0,y,[t_(on?"› ":"  ",CY),t_(padR(c[0],12),on?CY:D,{b:on}),t_(c[1],on?I:F)]); });
+      } else if (UI.view!=="overlay") status(scr,31);
+      scr.fill(0,32,COLS,3,BAND);
+      scr.put(1,33,"›",sty(D));
+      if (UI.buf){ scr.put(3,33,UI.buf,sty(I)); cursorAt(scr,3+len(UI.buf),33," ",I); }
+      else { const ph = UI.view==="overlay" ? "esc to return · ←/→ next card" : S.state==="stopped" ? "Type / for commands, s to mine" : "Type / for commands, t to stop"; scr.put(3,33,ph,sty(D)); cursorAt(scr,3,33,ph[0],I); }
+      let x=1; [["⏎","run"],["s","start"],["t","stop"],["/","commands"],["⌃C","quit"]].forEach(([k,l])=>{ x=scr.put(x,35,k,sty(I))+1; x=scr.put(x,35,l,sty(D))+3; });
+      scr.right(COLS-1,35, S.state==="running" ? `${fmtHs(S.hs10)} · ${Math.round(pctPeak())}% of peak` : S.state==="starting" ? `dataset ${Math.floor(S.ds)}%` : "not mining", sty(D));
+    }});
+})();
+/* ============================================================
+   5 · FORGE — Gemini CLI / community grok-cli lineage
+   ============================================================ */
+(function(){
+  const HEAT=[124,160,196,202,208,214,220,221,222], SH=52, BD=239, T=252, M=245, F=241, AC=208, OK=150, ER=203, WN=221, PATH=180;
+  const LET = {
+    X:["██   ██"," ██ ██ ","  ███  "," ██ ██ ","██   ██"],
+    M:["███   ███","████ ████","██ ███ ██","██  █  ██","██     ██"],
+    R:["██████ ","██   ██","██████ ","██  ██ ","██   ██"],
+    I:["██","██","██","██","██"],
+    N:["███   ██","████  ██","██ ██ ██","██  ████","██   ███"],
+    E:["███████","██     ","█████  ","██     ","███████"]
+  };
+  const SPIN="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+  const PHRASES=["Smelting hashes","Stoking the M4","Hammering scratchpads","Tempering nonces","Pouring shares"];
+  const t_=(t,c=T,x)=>[t,sty(c,x)];
+  function banner(scr){
+    const word="XMR MINER", cells=[]; let x=2;
+    for (const ch of word){ if (ch===" "){ x+=3; continue; } const g=LET[ch];
+      g.forEach((row,r)=>[...row].forEach((p,c)=>{ if (p==="█") cells.push([x+c,1+r]); })); x+=g[0].length+1; }
+    const maxX=x; const set=new Set(cells.map(([a,b])=>a+","+b));
+    for (const [cx,cy] of cells) if (!set.has((cx+1)+","+(cy+1))) scr.put(cx+1,cy+1,"░",sty(SH+36));
+    for (const [cx,cy] of cells){ const k=Math.min(HEAT.length-1,Math.floor((cx-2)/(maxX-2)*HEAT.length)); scr.put(cx,cy,"█",sty(HEAT[k])); }
+    scr.put(74,2,`v3 · XMRig ${JOB.version} arm64`,sty(M));
+    scr.put(74,3,`${JOB.algo} · ${JOB.mode} · ${JOB.threads} threads`,sty(M));
+    scr.put(74,4,`${JOB.cpu} · ${JOB.ram} · ${JOB.cores}`,sty(M));
+  }
+  function tips(scr,y){
+    scr.put(1,y,"Tips for getting started:",sty(T));
+    ["Press s to start mining. Nothing mines until you do.","Type / for commands. /usage is the dashboard.",
+     "t stops the miner and writes a session summary to your Desktop.","Keep ~3 GiB of memory free so the 2 GB dataset stays uncompressed."]
+      .forEach((l,i)=>scr.seg(1,y+1+i,[t_(`${i+1}. `,AC),t_(l,M)]));
+  }
+  function heatBar(scr,x,y,w,frac){
+    const n=Math.round(Math.max(0,Math.min(1,frac))*w);
+    for (let i=0;i<w;i++) scr.put(x+i,y,"█",sty(i<n?HEAT[Math.min(HEAT.length-1,Math.floor(i/w*HEAT.length))]:236));
+  }
+  /* each block: {h, draw(scr,y)} */
+  function blocks(){
+    const B=[], W=COLS-2;
+    const cardB=(title,draw)=>B.push({h:3,draw:(scr,y)=>{ scr.box(1,y,W,3,sty(BD)); if (title) scr.seg(3,y,[t_(" "+title+" ",M)]); draw(scr,y+1); }});
+    const line=(parts)=>B.push({h:1,draw:(scr,y)=>scr.seg(1,y,parts)});
+    const gap=()=>B.push({h:1,draw:()=>{}});
+    const tool=(ok,name,desc)=>cardB(null,(scr,y)=>scr.seg(3,y,[t_(ok?"✔  ":"✖  ",ok?OK:ER),t_(name,T,{b:true}),t_("  "+desc,M)]));
+    for (const e of S.events){
+      if (e.k==="user") { line([t_("> ",AC),t_(e.text,M)]); gap(); continue; }
+      if (e.k==="start") tool(true,"minerctl start","Started. It takes about a minute to reach full speed.");
+      if (e.k==="dsprog") cardB(null,(scr,y)=>{ const sp=UI.still?"⠿":SPIN[UI.frame%SPIN.length];
+        const x=scr.seg(3,y,[t_(sp+"  ",AC),t_("RandomX init",T,{b:true}),t_("  casting the 2 GB dataset  ",M)]);
+        heatBar(scr,x,y,30,S.ds/100); scr.put(x+31,y,`${Math.floor(S.ds)}%`,sty(T)); });
+      if (e.k==="dataset") line([t_("✦ ",AC),t_(`Dataset ready in ${(S.dsMs/1000).toFixed(1)} s: 2336 MB allocated, huge pages 0/1178.`)]);
+      if (e.k==="pool") tool(true,"pool connect",`${JOB.pool} · TLSv1.3 · ${S.ping} ms · ${JOB.worker}`);
+      if (e.k==="warn") line([t_("✦ ",WN),t_(e.title+": ",T),t_("the memory compressor was active.",M)]);
+      if (e.k==="shares") cardB("Shares",(scr,y)=>{ const s0=S.shares[0];
+        scr.seg(3,y,[t_("✔ ",OK),t_(fmt(S.acc),T,{b:true}),t_(" accepted   ",M),t_("✖ ",S.rej?ER:F),t_(String(S.rej),T,{b:true}),t_(" rejected   ",M),
+          t_(s0?`last diff ${fmt(s0.diff)} · ${s0.ms} ms · ${ago(S.lastShare)}`:"waiting for the first share…",M)]); });
+      if (e.k==="stop") tool(true,"minerctl stop",`Stopped after ${fmtUp(S.last.up)} · ${fmt(S.last.acc)} accepted · ${S.last.rej} rejected`);
+      if (e.k==="summary") line([t_("✦ ",AC),t_("Summary saved to "),t_("~/Desktop/"+S.last.file,PATH)]);
+      if (e.k==="note") line([t_("✦ ",AC),t_(e.text)]);
+      gap();
+    }
+    while (B.length && B[B.length-1].h===1 && B[B.length-1].draw.length===0) B.pop();
+    return B;
+  }
+  function stats(scr){
+    const run=S.state==="running", tot=S.acc+S.rej;
+    let x=1; ["Usage","Config","Logs"].forEach((t,i)=>{ const on=i===UI.tab; x=scr.put(x,8,on?`[ ${t} ]`:`  ${t}  `,sty(on?AC:M,{b:on}))+1; });
+    scr.right(COLS-1,8,"←/→ switch · esc close",sty(F));
+    scr.box(0,9,COLS,26,sty(BD));
+    const H=(xx,y,t)=>scr.put(xx,y,t,sty(AC,{b:true}));
+    const K=(xx,y,k,parts,kw=18)=>scr.seg(xx,y,[t_(padR(k,kw),M),...parts]);
+    const tab=TABS[UI.tab];
+    if (tab==="usage"){
+      scr.put(3,10,"Session Stats",sty(T,{b:true}));
+      H(3,12,"Mining Summary"); H(58,12,"Performance");
+      K(3,13,"Uptime:",[t_(run?fmtUp(S.up):"—")]);
+      K(3,14,"Shares:",[t_(fmt(S.acc)+" "),t_("( ",M),t_("✔ "+fmt(S.acc),OK),t_("  ✖ "+S.rej,S.rej?ER:M),t_(" )",M)]);
+      K(3,15,"Success Rate:",[t_(tot?(S.acc/tot*100).toFixed(1)+"%":"—",tot?OK:M)]);
+      K(3,16,"Share cadence:",[t_(run?`one every ~30 s at diff ${fmt(S.diff)}`:"—")]);
+      K(58,13,"Hashrate (10s):",[t_(fmtHs(S.hs10),T,{b:true})]);
+      const pc=v=>v&&S.hs10?`   ${(v/JOB.peak*100).toFixed(1)}%`:"";
+      K(58,14,"» 60s:",[t_(fmtHs(S.hs60)),t_(pc(S.hs60),M)]);
+      K(58,15,"» 15m:",[t_(fmtHs(S.hs15)),t_(pc(S.hs15),M)]);
+      K(58,16,"Peak (sweep):",[t_(fmtHs(JOB.peak))]);
+      H(3,18,"Thread Heat"); scr.put(16,18,`${JOB.cpu} · ${JOB.cores}`,sty(M));
+      S.thr.forEach((v,i)=>{ const xx=3+i*6+(i>=4?3:0), k=run?Math.max(0,Math.min(HEAT.length-1,Math.round(v/650*(HEAT.length-1)))):0;
+        scr.put(xx,19,"████",sty(run?HEAT[k]:236)); scr.put(xx,20,run?padR(String(v),4):"—",sty(run?T:F)); });
+      H(3,22,"Hashrate · last 100 s"); scr.right(COLS-3,22,run?`max ${fmt(S.max)}`:"miner off",sty(M));
+      if (S.hist.length) blockArea(scr,3,23,100,4,S.hist,3600,4250,(r)=>sty(run?[222,214,208,196][r]:[237,237,236,236][r]));
+      H(3,28,"Pool"); H(58,28,"Machine");
+      K(3,29,"Pool:",[t_(JOB.pool)],10);
+      K(3,30,"Link:",[t_(`TLS · ${run?S.ping+" ms":"—"} · ${S.fails} failure`)],10);
+      K(3,31,"Worker:",[t_(JOB.worker)],10);
+      K(58,29,"CPU:",[t_(`${JOB.cpu} · ${JOB.ram} · ${JOB.cores}`)],10);
+      K(58,30,"Dataset:",[t_(S.state==="stopped"?"released":S.ds>=100?"2.0 GB ready":`${Math.floor(S.ds)}% of 2.0 GB`)],10);
+      K(58,31,"Pages:",[t_("huge pages 0/1178 (macOS has none)")],10);
+      scr.seg(3,33,[t_("✦ ",AC),t_(run?(pctPeak()>=95?"Right at the offline sweep's peak. If H/s drops, check the compressor or a second miner.":"Below peak: still warming, or cores are busy."):"Miner is off. Only s starts it; slash commands never do.",M)]);
+    } else if (tab==="config"){
+      scr.put(3,10,"Job File",sty(T,{b:true})); scr.put(13,10,"· "+JOB.plist,sty(M));
+      [["Algorithm:",JOB.algo],["RandomX mode:",JOB.mode],["Threads:",String(JOB.threads)],["Init threads:",String(JOB.init)],["Pool:",JOB.pool],
+       ["Worker:",JOB.worker],["HTTP API:",JOB.http],["Donate level:",JOB.donate+"%"],["Flex:",S.flex?"on · pool picks the algo":"off · rx/0 only"],["Folder:",JOB.path]]
+        .forEach(([k,v],i)=>K(3,12+i*2,k,[t_(v)]));
+      scr.seg(3,32,[t_("✦ ",AC),t_("Edit the plist, then t and s to apply. Mining starts on s only.",M)]);
+    } else {
+      scr.put(3,10,UI.err?"xmrig.err.log":"xmrig.log",sty(T,{b:true})); scr.put(3+len(UI.err?"xmrig.err.log":"xmrig.log")+1,10,"· e switches log",sty(M));
+      if (UI.err) scr.put(3,12,"(empty) nothing on stderr this session",sty(M));
+      else logTail(21).forEach((l,i)=>scr.seg(3,12+i,[t_(stamp(l.ts).slice(11,19)+"  ",F),t_(padR(l.mod,9),l.tone==="rx"?AC:M),t_(clip(l.msg,92),l.tone==="ok"?OK:l.tone==="bad"?ER:T)]));
+    }
+  }
+  function footer(scr,y){
+    scr.seg(1,y,[t_(JOB.path,M),t_(" (main)",PATH)]);
+    const mid = S.state==="running" ? ["caffeinate -i · mining",OK] : S.state==="starting" ? ["caffeinate -i · warming",WN] : ["idle · nothing mining",F];
+    scr.put(Math.floor((COLS-len(mid[0]))/2),y,mid[0],sty(mid[1]));
+    scr.right(COLS-1,y, S.state==="running"?`rx/0 (${Math.round(pctPeak())}% of peak)`:S.state==="starting"?`rx/0 (dataset ${Math.floor(S.ds)}%)`:"rx/0 (miner off)", sty(M));
+  }
+  DESIGNS.push({ id:"forge", name:"Forge", lineage:"Gemini CLI / grok-cli lineage", prof:{bg:"#0e0c0b",fg:252},
+    render(scr){
+      banner(scr);
+      if (UI.view==="overlay"){ stats(scr); footer(scr,ROWS-1); return; }
+      const ms=matches(), pal=UI.buf.startsWith("/"), pn=pal?Math.max(1,Math.min(ms.length,8)):0;
+      const boxY = ROWS-1-pn-3-(pal?0:1);
+      const spinY = boxY-2;
+      const B=blocks(), total=B.reduce((a,b)=>a+b.h,0);
+      const bottom = (S.state==="stopped"?boxY-2:spinY-2);
+      const withTips = total <= bottom-14+1;
+      let y = withTips ? 14 : 8;
+      if (withTips) tips(scr,8);
+      let skip = Math.max(0,total-(bottom-y+1)), yy=y;
+      for (const blk of B){ if (skip>=blk.h){ skip-=blk.h; continue; } if (skip>0){ skip=0; continue; } blk.draw(scr,yy); yy+=blk.h; }
+      if (S.state!=="stopped"){
+        const sp=UI.still?"⠿":SPIN[UI.frame%SPIN.length], ph=S.state==="starting"?"Casting the dataset":PHRASES[Math.floor(S.up/9)%PHRASES.length];
+        scr.seg(1,spinY,[t_(sp+" ",AC),t_(ph+"… ",T,{i:true}),t_(`(t to stop, ${fmtUp(S.up)})`,F)]);
+      }
+      scr.box(0,boxY,COLS,3,sty(UI.buf?AC:BD));
+      scr.put(2,boxY+1,">",sty(AC,{b:true}));
+      if (UI.buf){ scr.put(4,boxY+1,UI.buf,sty(T)); cursorAt(scr,4+len(UI.buf),boxY+1," ",T); }
+      else { const ph = S.state==="stopped" ? "Type / for commands, or s to start mining" : "Type / for commands, or t to stop"; scr.put(4,boxY+1,ph,sty(F)); cursorAt(scr,4,boxY+1,ph[0],T); }
+      if (pal){
+        if (!ms.length) scr.put(3,boxY+3,"No commands found",sty(M));
+        const w=paletteWindow(ms,pn);
+        w.rows.forEach((c,i)=>{ const on=w.start+i===w.sel;
+          scr.seg(3,boxY+3+i,[t_(padR(c[0],12),on?214:T,{b:on}),t_(c[1],on?214:F)]); });
+      }
+      footer(scr,ROWS-1);
+    }});
+})();
+/* ============================================================
+   Notes, comparison, wiring
+   ============================================================ */
+const NOTES = {
+  session:{ lineage:"Claude Code lineage · warm clay on your Terminal profile's own background",
+    thesis:"Mining reads like an agent session. Start, dataset, pool and shares arrive as tool-call turns, live state sits in a spinner line above the prompt, and the prompt is framed by rules instead of a box. It is the closest to today's miner-ui.py, so it is the smallest change.",
+    moves:[["⏺ minerctl(start)\n  ⎿  Started…","Events are turns with their real output underneath. The Shares turn updates in place instead of scrolling a line per share."],
+      ["✻ Hashing… (t to stop · 16h 8m)","Spinner with a shimmer sweep and rotating verbs, exactly where Claude shows it is working."],
+      ["⏵⏵ mining on (t to stop)","Mode line under the prompt replaces today's ›› status line."],
+      ["⛁ ⛁ ⛁ ⛁  ⛁ ⛁ ⛁ ⛁ ⛁ ⛁","/usage borrows /context's cell grid: one cell per thread, P-cores clay, E-cores tan, H/s under each."]],
+    pal:[[173,"accent · mascot, spinner"],[216,"shimmer highlight"],[147,"selection"],[71,"success dot"],[179,"warning"],[204,"error"],[238,"prompt rules"],[236,"bar track"]],
+    facts:[["Background","Uses your Terminal profile's (no painting)"],["At 80×24","Works; the transcript shows fewer turns"],["Build effort","Small: same draw loop plus a turn renderer and spinner"],["Watch out","⏺ ⎿ ✻ ⛁ come from fallback fonts in Terminal.app. They render fine; Claude Code relies on them"]] },
+  monolith:{ lineage:"Grok Build lineage · grayscale only, color reserved for errors",
+    thesis:"The hashrate is the interface. A 7-row numeral fills the top, a monochrome area chart shows the last 160 seconds, and events stream as ◆ lines that fade from white to gray as they age. Status is carried by weight and inverse video instead of hue, the way Grok's own UI works.",
+    moves:[["4,178  (13-glyph █ font)","Big block numerals. While starting, the dataset percentage takes their place."],
+      ["[running]   ❯","Bracketed inverse status tag and the ❯ prompt, as in Grok Build."],
+      ["◆ Share accepted in 0.14s","Newest first; brightness encodes recency, so the screen reads at a glance from across the room."],
+      ["Enter:run│s:start   [uptime: 16h 8m, ↑1,945]","Keycap hint bar with │ separators, and a bracketed counter where Grok shows [turn: 21s, ↕16.8k]."]],
+    pal:[[231,"primary · numerals"],[252,"body text"],[245,"labels"],[240,"hints, axes"],[236,"rules"],[203,"errors only"]],
+    facts:[["Background","Uses the profile's; designed for black"],["At 80×24","Tight: numeral and chart stay, the stream drops to ~4 lines"],["Build effort","Medium: the digit font and chart are new code"],["Watch out","Without color a rejected share is easy to miss, so red stays for errors"]] },
+  cockpit:{ lineage:"OpenCode lineage · violet and aqua on painted slate panels",
+    thesis:"A full-screen app with a permanent telemetry sidebar, so nothing needs /usage to be seen: sparkline, shares per minute, P/E thread load, pool, machine and dataset. The left pane is a timestamped feed with module pills, and commands open as a floating dialog with a drop shadow.",
+    moves:[["┃ … │ MINING  rx/0 · fast","Input panel with an accent edge and a mode pill (MINING, WARMING, IDLE), like OpenCode's agent badge."],
+      ["⣀⣤⣶⣿ braille sparkline","2×4 dots per cell puts 60 samples in 30 columns."],
+      [" share   job   net   randomx ","Module pills make the feed scannable without reading every line."],
+      ["ctrl+p · centered dialog","Commands float over the feed instead of pushing content around."]],
+    pal:[[234,"ground"],[235,"sidebar"],[236,"input panel"],[141,"accent"],[116,"data"],[114,"good"],[215,"warming"],[203,"error"]],
+    facts:[["Background","Painted on every cell, so it looks the same on light or dark profiles"],["At 80×24","No: the sidebar needs ≥ 100 columns. Collapse it below that"],["Build effort","Large: two panes, a dialog layer, background painting"],["Watch out","The most drawing per refresh; keep the synchronized-update escape you already use against flicker"]] },
+  ledger:{ lineage:"Codex CLI lineage · your terminal's ink, one cyan, green for credits",
+    thesis:"Scrollback-first and quiet. A small card lists the job once, then plain bullets with └ results. Shares are kept as a tabular ledger of number, time, difficulty, latency and verdict. /usage, /config and /logs print cards into the transcript instead of opening a screen. The only motion is a shimmer across \"Mining\".",
+    moves:[[">_ XMR Miner (XMRig 6.26.0)","Header card with job, pool and folder; no other persistent chrome."],
+      ["└ #1,945  12:43:58  diff 125,113  143 ms ✓","Shares as aligned ledger rows."],
+      ["[████████████░░]  99% of peak","Codex /status-style bracket bars inside the /usage card."],
+      ["◦ Mining (16h 08m 12s • t to stop)","A single status line; footer lists ⏎ s t / ⌃C."]],
+    pal:[[253,"ink"],[244,"secondary"],[240,"card border"],[80,"commands, prompt mark"],[114,"accepted"],[210,"rejected"],[179,"warning"],[236,"input band"]],
+    facts:[["Background","Only the input band and your own turns"],["At 80×24","Works; nothing is fixed except the input band"],["Build effort","Small to medium: mostly text layout and boxes"],["Watch out","Least at-a-glance: hashrate lives in the footer and the /usage card"]] },
+  forge:{ lineage:"Gemini CLI / community grok-cli lineage · heat ramp from ember to yellow",
+    thesis:"The loud one. A shadowed XMR MINER banner in a heat gradient (hashing is heat), getting-started tips rewritten as your miner's actual rules, tool calls in bordered cards, and a three-part footer: folder and branch, what is running, and rx/0 with % of peak where Gemini shows context left.",
+    moves:[["█ letters + ░ shadow","Banner colored column by column along xterm 124 → 222."],
+      ["╭─ Shares ─╮  ✔ 1,945 accepted","Tool-call cards with ✔ and ✖, plus a live Shares card."],
+      ["⠼ Smelting hashes… (t to stop, 16h 8m)","Braille spinner with rotating phrases."],
+      ["Thread Heat  ████ 612","/usage maps each core's H/s onto the same heat ramp."]],
+    pal:[[124,"ember"],[202,"flame"],[208,"accent"],[220,"hot"],[150,"success"],[203,"error"],[239,"card borders"],[180,"paths"]],
+    facts:[["Background","Uses the profile's"],["At 80×24","Works; hide the banner below 70 columns"],["Build effort","Medium: banner font, cards, heat mapping"],["Watch out","The loudest thing on screen for a window you leave open for 16 hours"]] }
+};
+const CMP = [
+  ["Layout",["Transcript + ruled prompt","Numeral + chart + stream","Feed + telemetry sidebar","Inline scrollback","Banner + tool cards"]],
+  ["Live numbers",["Spinner line, footer","Top half of the screen","Sidebar, always on","Footer, /usage card","Spinner, footer, Shares card"]],
+  ["Color",["Clay + periwinkle","Grayscale","Violet + aqua on slate","Ink + cyan","Heat ramp"]],
+  ["Paints background",["No","No","Yes","Input band","No"]],
+  ["80 × 24",["Yes","Tight","No (needs 100+)","Yes","Yes"]],
+  ["Build effort",["Small","Medium","Large","Small–medium","Medium"]],
+  ["Pick it if you",["want it to feel like Claude Code","glance at it from across the room","never want to type /usage","like a quiet log you can scroll","want it to feel like a product"]]
+];
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+const $ = id => document.getElementById(id);
+const cv=$("cv"), term=$("term"), P=new Painter(cv);
+const off=document.createElement("canvas"), OP=new Painter(off);
+const thumbs=[];
+let dirty=true;
+
+function renderNotes(){
+  const d=DESIGNS[UI.d], n=NOTES[d.id];
+  $("notes").innerHTML =
+    `<div><h2>${UI.d+1} · ${esc(d.name)}</h2><p class="lineage">${esc(n.lineage)}</p><p>${esc(n.thesis)}</p>
+      <ul class="moves">${n.moves.map(([g,t])=>`<li><code>${esc(g).replace(/\n/g,"<br>")}</code><span>${esc(t)}</span></li>`).join("")}</ul></div>
+     <div class="side"><div class="k">Palette · xterm-256 index, as Terminal.app draws it</div>
+      <div class="sw">${n.pal.map(([i,role])=>`<div><b style="background:${X256[i]}"></b><span>${i} · ${X256[i]}</span><small>${esc(role)}</small></div>`).join("")}</div>
+      <dl class="facts">${n.facts.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl></div>`;
+  $("cmp").innerHTML = `<thead><tr><th></th>${DESIGNS.map((x,i)=>`<th class="${i===UI.d?"on":""}">${i+1} ${esc(x.name)}</th>`).join("")}</tr></thead>
+    <tbody>${CMP.map(([k,v])=>`<tr><th>${esc(k)}</th>${v.map((c,i)=>`<td class="${i===UI.d?"on":""}">${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+}
+function select(i){
+  UI.d=i; dirty=true; P.keys.fill("");
+  document.querySelectorAll(".pick").forEach((b,j)=>b.setAttribute("aria-pressed", String(j===i)));
+  term.style.background = DESIGNS[i].prof.bg;
+  $("wtitle").textContent = `XMR MINER — python3 miner-ui.py — ${DESIGNS[i].name} — 110×36`;
+  renderNotes();
+}
+function syncButtons(){
+  document.querySelectorAll("#scen button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===S.state)));
+  const v = UI.view==="overlay" ? TABS[UI.tab] : UI.buf.startsWith("/") ? "palette" : "home";
+  document.querySelectorAll("#scr button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.v===v)));
+}
+function fit(){
+  const lab=document.querySelector(".lab"), cs=getComputedStyle(lab);
+  const avail = lab.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 20;
+  const c=P.ctx; c.font=`100px ${FONT_STACK}`; const r=c.measureText("0").width/100;
+  const px=Math.max(5, Math.min(14, Math.floor(avail/(COLS*r)*4)/4));
+  P.setSize(px, window.devicePixelRatio||1); dirty=true;
+}
+function drawThumbs(){
+  DESIGNS.forEach((d,i)=>{
+    const scr=new Scr(); try { d.render(scr); } catch(e){}
+    OP.paint(scr, d.prof, true);
+    const t=thumbs[i]; if (t.width!==off.width/2){ t.width=off.width/2; t.height=off.height/2; }
+    const x=t.getContext("2d"); x.imageSmoothingQuality="high"; x.drawImage(off,0,0,t.width,t.height);
+  });
+}
+
+DESIGNS.forEach((d,i)=>{
+  const b=document.createElement("button"); b.className="pick"; b.type="button";
+  b.innerHTML=`<canvas aria-hidden="true"></canvas><span class="n">${i+1}</span><span class="nm">${esc(d.name)}</span><span class="ln">${esc(d.lineage)}</span>`;
+  b.addEventListener("click",()=>select(i));
+  $("picks").appendChild(b); thumbs.push(b.querySelector("canvas"));
+});
+document.querySelectorAll("#scen button").forEach(b=>b.addEventListener("click",()=>{
+  scenario(b.dataset.s); UI.buf=""; UI.sel=0; dirty=true; syncButtons(); drawThumbs();
+}));
+document.querySelectorAll("#scr button").forEach(b=>b.addEventListener("click",()=>{
+  const v=b.dataset.v; UI.sel=0; UI.err=false;
+  if (v==="home"){ UI.view="home"; UI.buf=""; }
+  else if (v==="palette"){ UI.view="home"; UI.buf="/"; }
+  else { UI.view="overlay"; UI.tab=TABS.indexOf(v); UI.buf=""; }
+  dirty=true; syncButtons(); drawThumbs(); term.focus({preventScroll:true});
+}));
+term.addEventListener("keydown",e=>{ if (onKey(e)){ dirty=true; syncButtons(); } });
+term.addEventListener("mousedown",()=>term.focus({preventScroll:true}));
+document.addEventListener("keydown",e=>{
+  if (document.activeElement===term || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/^[1-5]$/.test(e.key)){ select(+e.key-1); }
+});
+window.addEventListener("resize",()=>{ clearTimeout(fit.t); fit.t=setTimeout(fit,120); });
+
+scenario("running");
+OP.setSize(7,2);
+fit(); select(0); syncButtons(); drawThumbs();
+
+let lastTick=performance.now(), lastThumb=0, lastBlink=0, lastFrame=-1;
+function loop(t){
+  if (t-lastTick>=1000){ lastTick = t-lastTick>4000 ? t : lastTick+1000; simTick(); syncButtons(); dirty=true; }
+  if (!UI.still && t-lastBlink>=530){ UI.blink=!UI.blink; lastBlink=t; dirty=true; }
+  const f = UI.still ? 0 : Math.floor(t/90);
+  if (f!==lastFrame){ lastFrame=f; UI.frame=f; if (S.state!=="stopped") dirty=true; }
+  if (dirty){
+    dirty=false;
+    const scr=new Scr(), d=DESIGNS[UI.d];
+    try { d.render(scr); } catch(err){ console.error(err); scr.put(1,1,"render error: "+err.message,{fg:203}); }
+    P.paint(scr, d.prof);
+  }
+  if (t-lastThumb>=1000){ lastThumb=t; drawThumbs(); }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

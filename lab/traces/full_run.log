@@ -1,0 +1,87 @@
+== FULL strict run, Argon2 every block (started 14:00)
+1a v1 R = 639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f  (109092412 ops, 0 mismatches, 294s)
+1a v2 R = 22ec6b861b3eb23686b2efbad69513c967ecfce80983df66c9c5b4fbfb4cdb6f  (123163214 ops, 0 mismatches, 400s)
+1b v1 R = 300a0adb47603dedb42228ccb2b211104f4da45af709cd7547cd049e9489c969  (109090420 ops, 0 mismatches, 271s)
+1b v2 R = 9e2c772c12fd48f93c14c97fdc89d556264d9100597023f44d9163e279012ecf  (123417779 ops, 0 mismatches, 414s)
+1c v1 R = c36d4ed4191e617309867ed66a443be4075014e2b061bcdaf9ce7b721d2b77a8  (109017387 ops, 0 mismatches, 271s)
+1c v2 R = 4d6b063a1a603751d525f18a171336a4002f2f06df6c17e4b25fe17e17796e42  (123184261 ops, 0 mismatches, 390s)
+  add64       calls   2161957042  mismatches 0
+  sub64       calls     43630903  mismatches 0
+  mul64       calls    106374574  mismatches 0
+  mulh64      calls     12041677  mismatches 0
+  smulh64     calls     12803309  mismatches 0
+  neg64       calls       262673  mismatches 0
+  xor64       calls   1682586959  mismatches 0
+  and64       calls    849192490  mismatches 0
+  or64        calls      1846716  mismatches 0
+  shl64       calls    443422661  mismatches 0
+  shr64       calls     31375410  mismatches 0
+  ror64       calls   1286588830  mismatches 0
+  rol64       calls       235934  mismatches 0
+  cmp64       calls      2196109  mismatches 0
+  rcp64       calls          681  mismatches 0
+  mul32x32    calls    402652160  mismatches 0
+  fadd        calls      5127820  mismatches 0
+  fsub        calls      5292504  mismatches 0
+  fmul        calls      7891254  mismatches 0
+  fdiv        calls      1055100  mismatches 0
+  fsqrt       calls      1441196  mismatches 0
+  i32_to_f64  calls      5128144  mismatches 0
+  mod64       calls      2359350  mismatches 0
+-- key000 done 15:04
+1d v1 R = e9ff4503201c0c2cca26d285c93ae883f9b1d30c9eb240b820756f2d5a7905fc  (108241315 ops, 0 mismatches, 271s)
+1d v2 R = 97024134686ce27d362ea8d86d8ef16483ac272abdabd46ef13359400777fe5e  (122675748 ops, 0 mismatches, 404s)
+1e v1 R = c56414121acda1713c2f2a819d8ae38aed7c80c35c2a769298d34f03833cd5f1  (108181427 ops, 0 mismatches, 277s)
+1e v2 R = c8e92c5f7c1946fecf06bc382b92e3111da38ee3e6a5ad90704e1a9d8aaf6e76  (122557354 ops, 0 mismatches, 411s)
+  add64       calls   2116192904  mismatches 0
+  sub64       calls     29180718  mismatches 0
+  mul64       calls     71015352  mismatches 0
+  mulh64      calls      9738960  mismatches 0
+  smulh64     calls      7705532  mismatches 0
+  neg64       calls       170276  mismatches 0
+  xor64       calls   1626125725  mismatches 0
+  and64       calls    834956475  mismatches 0
+  or64        calls      1215096  mismatches 0
+  shl64       calls    428925621  mismatches 0
+  shr64       calls     21718690  mismatches 0
+  ror64       calls   1259110810  mismatches 0
+  rol64       calls       129295  mismatches 0
+  cmp64       calls      2163306  mismatches 0
+  rcp64       calls          568  mismatches 0
+  mul32x32    calls    402652160  mismatches 0
+  fadd        calls      3268622  mismatches 0
+  fsub        calls      3211348  mismatches 0
+  fmul        calls      5255712  mismatches 0
+  fdiv        calls       685816  mismatches 0
+  fsqrt       calls      1145560  mismatches 0
+  i32_to_f64  calls      3224654  mismatches 0
+  mod64       calls      2359334  mismatches 0
+-- key001 done 15:56
+1f v1 R = 3916cf4b409c90f9a632ee152cebab898c2fe8e1b4ab1a1b0ef86978c4aa59ef  (109476408 ops, 0 mismatches, 269s)
+  add64       calls   2042719724  mismatches 0
+  sub64       calls      9192418  mismatches 0
+  mul64       calls     19528491  mismatches 0
+  mulh64      calls      1900662  mismatches 0
+  smulh64     calls      2001035  mismatches 0
+  neg64       calls        43081  mismatches 0
+  xor64       calls   1543894354  mismatches 0
+  and64       calls    811441935  mismatches 0
+  or64        calls       258840  mismatches 0
+  shl64       calls    409188164  mismatches 0
+  shr64       calls      5660746  mismatches 0
+  ror64       calls   1221492873  mismatches 0
+  rol64       calls        53324  mismatches 0
+  cmp64       calls      2114109  mismatches 0
+  rcp64       calls          287  mismatches 0
+  mul32x32    calls    402652160  mismatches 0
+  fadd        calls       689514  mismatches 0
+  fsub        calls       726582  mismatches 0
+  fmul        calls       984868  mismatches 0
+  fdiv        calls       123064  mismatches 0
+  fsqrt       calls       246212  mismatches 0
+  i32_to_f64  calls       709520  mismatches 0
+  mod64       calls      2359310  mismatches 0
+== FULL RUN DONE 16:30
+-rw-r--r--@ 1 christiantavarez  staff  576984 Sep 12 15:04 ../traces/key000_full.jsonl
+-rw-r--r--@ 1 christiantavarez  staff  386044 Sep 12 15:56 ../traces/key001_full.jsonl
+-rw-r--r--@ 1 christiantavarez  staff   98564 Sep 12 16:30 ../traces/key1f_full.jsonl

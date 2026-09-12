@@ -1,0 +1,26 @@
+== 1f strict run started 16:31
+1f v1 R = 78af2a1864c42abce36d2e8983e13df99b2af0ce1362999af09fab004d4435a8  (109233055 ops, 0 mismatches, 270s)
+  add64       calls   2042683563  mismatches 0
+  sub64       calls      9139145  mismatches 0
+  mul64       calls     19577890  mismatches 0
+  mulh64      calls      1913009  mismatches 0
+  smulh64     calls      1996975  mismatches 0
+  neg64       calls        26677  mismatches 0
+  xor64       calls   1543978831  mismatches 0
+  and64       calls    811415851  mismatches 0
+  or64        calls       275218  mismatches 0
+  shl64       calls    409184149  mismatches 0
+  shr64       calls      5660746  mismatches 0
+  ror64       calls   1221460083  mismatches 0
+  rol64       calls        45151  mismatches 0
+  cmp64       calls      2114109  mismatches 0
+  rcp64       calls          287  mismatches 0
+  mul32x32    calls    402652160  mismatches 0
+  fadd        calls       652842  mismatches 0
+  fsub        calls       591174  mismatches 0
+  fmul        calls       997676  mismatches 0
+  fdiv        calls       139442  mismatches 0
+  fsqrt       calls       225756  mismatches 0
+  i32_to_f64  calls       647876  mismatches 0
+  mod64       calls      2359310  mismatches 0
+== 1F DONE 17:05  (official 78af2a1864c42abce36d2e8983e13df99b2af0ce1362999af09fab004d4435a8)

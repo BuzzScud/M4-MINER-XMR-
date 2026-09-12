@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XMR Miner TUI Directions · round 2</title>
+<style>
+  /* Same ground as RandomX-formula-lab.html / RandomX-how-its-made.html.
+     System fonts only: this file must open offline. Single dark theme on purpose:
+     the mockups are dark terminals and colors are judged against a neutral dark surround. */
+  :root{
+    --bg:#0d0e11; --bar:#111216; --card:#14151a; --sunk:#0e0f14; --raise:#181a20;
+    --line:rgba(240,238,230,.10); --line2:rgba(240,238,230,.18);
+    --ink:#f0eee6; --ink2:#c4c2b9; --muted:#84837c; --faint:#55544f;
+    --gold:#d9a441; --gold-bg:#2a2416; --teal:#26c6c0; --green:#2fbf85; --pink:#d55181;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+  button{font:inherit;color:inherit}
+  :focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:12px 20px;
+       border-bottom:1px solid var(--line);background:var(--bar)}
+  .top h1{margin:0;font:600 15px/1.2 var(--mono);letter-spacing:-.01em}
+  .top h1 b{color:var(--gold);font-weight:600}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{font:11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);
+        border-radius:999px;padding:5px 9px;white-space:nowrap}
+  .chip em{font-style:normal;color:var(--ink2)}
+
+  .app{display:grid;grid-template-columns:272px minmax(0,1fr);min-height:calc(100vh - 50px)}
+  .rail{border-right:1px solid var(--line);padding:16px 12px 24px;display:flex;flex-direction:column;gap:8px}
+  .k{font:600 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .rail .k{margin:2px 4px 6px}
+  .pick{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;align-items:baseline;text-align:left;
+        background:transparent;border:1px solid transparent;border-radius:10px;padding:8px;cursor:pointer}
+  .pick:hover{background:var(--raise)}
+  .pick[aria-pressed="true"]{background:var(--gold-bg);border-color:rgba(217,164,65,.45)}
+  .pick canvas{grid-column:1/-1;width:100%;height:auto;border-radius:5px;display:block;
+        background:#000;box-shadow:0 0 0 1px var(--line)}
+  .pick .n{font:600 11px/1 var(--mono);color:var(--muted);padding-top:6px}
+  .pick[aria-pressed="true"] .n{color:var(--gold)}
+  .pick .nm{font:600 14px/1.2 var(--sans);padding-top:6px}
+  .pick .ln{grid-column:2;font:11px/1.3 var(--mono);color:var(--muted)}
+  .rail .hint{margin:10px 4px 0}
+
+  .lab{padding:16px 22px 40px;display:flex;flex-direction:column;gap:14px;min-width:0}
+  .controls{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+  .seg{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .seg .k{margin-right:4px}
+  .seg button{font:12px/1 var(--mono);background:var(--raise);border:1px solid var(--line);
+        color:var(--ink2);border-radius:7px;padding:7px 10px;cursor:pointer}
+  .seg button:hover{background:#1e2028;color:var(--ink)}
+  .seg button[aria-pressed="true"]{background:var(--gold-bg);border-color:rgba(217,164,65,.5);color:var(--gold)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:0}
+
+  .win{align-self:flex-start;max-width:100%;border-radius:11px;overflow:hidden;
+       box-shadow:0 0 0 1px rgba(255,255,255,.09),0 24px 60px rgba(0,0,0,.55)}
+  .tb{height:30px;display:flex;align-items:center;gap:8px;padding:0 12px;background:#26272b;
+      border-bottom:1px solid #000;position:relative}
+  .tb i{width:12px;height:12px;border-radius:50%;background:#ff5f57}
+  .tb i:nth-child(2){background:#febc2e} .tb i:nth-child(3){background:#28c840}
+  .tb span{position:absolute;left:0;right:0;text-align:center;font:12px/30px var(--sans);
+      color:#9d9ea3;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 80px}
+  .term{padding:8px 10px;cursor:text;position:relative;outline:none}
+  .term canvas{display:block}
+  .term:focus-visible{box-shadow:inset 0 0 0 2px var(--gold)}
+  .hint{font:12px/1.5 var(--mono);color:var(--muted);margin:0}
+  .hint kbd{font:inherit;color:var(--ink2);background:var(--raise);border:1px solid var(--line);
+      border-radius:4px;padding:0 5px}
+  .live{color:var(--green)}
+
+  .notes{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:18px;margin-top:6px;
+         border-top:1px solid var(--line);padding-top:18px;max-width:1180px}
+  .notes h2{margin:0 0 4px;font:600 22px/1.2 var(--sans);letter-spacing:-.015em;text-wrap:balance}
+  .notes .lineage{font:12px/1.4 var(--mono);color:var(--gold);margin:0 0 10px}
+  .notes p{margin:0 0 12px;color:var(--ink2);max-width:62ch}
+  .moves{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:9px}
+  .moves li{display:grid;grid-template-columns:13em 1fr;gap:12px;color:var(--ink2);font-size:13.5px;
+            padding-top:9px;border-top:1px solid var(--line)}
+  .moves code{font:12px/1.55 var(--mono);color:var(--ink);overflow-wrap:anywhere}
+  @media (max-width:640px){ .moves li{grid-template-columns:1fr;gap:2px} }
+  .side{display:flex;flex-direction:column;gap:14px}
+  .sw{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+  .sw div{display:grid;grid-template-columns:26px 1fr;gap:0 9px;align-items:center;background:var(--card);
+      border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+  .sw b{grid-row:1/3;width:26px;height:26px;border-radius:5px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+  .sw span{font:11px/1.25 var(--mono);color:var(--ink)}
+  .sw small{font:10.5px/1.25 var(--mono);color:var(--muted)}
+  dl.facts{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}
+  dl.facts dt{font:600 10px/1.9 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  dl.facts dd{margin:0;color:var(--ink2)}
+
+  .compare{max-width:1180px;border-top:1px solid var(--line);padding-top:18px;margin-top:8px}
+  .compare h2{margin:0 0 10px;font:600 16px/1.2 var(--sans)}
+  .tbl{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;min-width:760px;font-size:13px}
+  th,td{text-align:left;padding:8px 12px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{font:600 10px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  tbody th{font:600 12px/1.4 var(--mono);color:var(--muted);white-space:nowrap}
+  td{color:var(--ink2)}
+  td.on{color:var(--ink)}
+  th.on{color:var(--gold)}
+  .foot{max-width:1180px;color:var(--muted);font-size:13px;margin:6px 0 0}
+
+  @media (max-width:1080px){
+    .app{grid-template-columns:1fr}
+    .rail{border-right:0;border-bottom:1px solid var(--line);flex-direction:row;overflow-x:auto;padding:12px}
+    .rail .k,.rail .hint{display:none}
+    .pick{min-width:200px}
+    .notes{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>XMR Miner <b>TUI Directions · round 2</b></h1>
+  <div class="chips">
+    <span class="chip">built on the <em>Ledger</em> you run now</span>
+    <span class="chip"><em>147 × 58</em> the size the dock launcher opens (mockups are 110 × 36)</span>
+    <span class="chip"><em>xterm-256</em> only, Terminal.app has no truecolor</span>
+    <span class="chip"><em>Menlo / SF Mono</em> cell grid</span>
+    <span class="chip">mining still starts on <em>s</em> only</span>
+  </div>
+</header>
+
+<div class="app">
+  <nav class="rail" aria-label="Design directions">
+    <div class="k">Three directions · plus now</div>
+    <div id="picks" style="display:contents"></div>
+    <p class="hint">Keys <kbd>1</kbd>–<kbd>3</kbd> switch directions, <kbd>4</kbd> is the current screen, when the terminal isn't focused.</p>
+  </nav>
+
+  <main class="lab">
+    <div class="controls">
+      <div class="seg" id="scen" role="group" aria-label="Miner state">
+        <span class="k">Miner</span>
+        <button data-s="stopped"><span class="dot" style="background:#84837c"></span>Stopped</button>
+        <button data-s="starting"><span class="dot" style="background:#d9a441"></span>Starting</button>
+        <button data-s="running"><span class="dot" style="background:#2fbf85"></span>Mining 16h in</button>
+      </div>
+      <div class="seg" id="scr" role="group" aria-label="Screen">
+        <span class="k">Screen</span>
+        <button data-v="home">Home</button>
+        <button data-v="palette">/ commands</button>
+        <button data-v="usage">/usage</button>
+        <button data-v="config">/config</button>
+        <button data-v="logs">/logs</button>
+      </div>
+    </div>
+
+    <div class="win">
+      <div class="tb"><i></i><i></i><i></i><span id="wtitle">XMR MINER — miner-ui.py — 110×36</span></div>
+      <div class="term" id="term" tabindex="0" role="application"
+           aria-label="Interactive terminal mockup. Type slash for commands, s to start, t to stop, escape to go back.">
+        <canvas id="cv"></canvas>
+      </div>
+    </div>
+    <p class="hint">Click the terminal and use it: <kbd>/</kbd> commands · <kbd>↑</kbd><kbd>↓</kbd> pick · <kbd>tab</kbd> complete · <kbd>enter</kbd> run · <kbd>s</kbd> start · <kbd>t</kbd> stop · <kbd>esc</kbd> back · <kbd>←</kbd><kbd>→</kbd> tabs. <span class="live">Numbers are simulated live</span> from your M4's real figures.</p>
+
+    <section class="notes" id="notes" aria-live="polite"></section>
+
+    <section class="compare">
+      <h2>Side by side</h2>
+      <div class="tbl"><table id="cmp"></table></div>
+    </section>
+    <p class="foot">Reply with a number (or "2's rail with 3's headline") and I'll build it into <code>bin/miner-ui.py</code>. Nothing here touched the miner.</p>
+  </main>
+</div>
+<script>
+"use strict";
+/* ============================================================
+   Engine: a 110x36 cell grid, xterm-256 colors, a canvas painter
+   that draws box/block/braille glyphs itself (like a real terminal),
+   a miner simulation seeded from this M4's real numbers, and input.
+   ============================================================ */
+const COLS = 110, ROWS = 36;
+
+const X256 = (() => {
+  const t = ["#000000","#cd0000","#00cd00","#cdcd00","#0000ee","#cd00cd","#00cdcd","#e5e5e5",
+             "#7f7f7f","#ff0000","#00ff00","#ffff00","#5c5cff","#ff00ff","#00ffff","#ffffff"];
+  const lv = [0,95,135,175,215,255], h = v => v.toString(16).padStart(2,"0");
+  for (let r=0;r<6;r++) for (let g=0;g<6;g++) for (let b=0;b<6;b++) t.push("#"+h(lv[r])+h(lv[g])+h(lv[b]));
+  for (let i=0;i<24;i++){ const v=8+10*i; t.push("#"+h(v)+h(v)+h(v)); }
+  return t;
+})();
+
+/* ---------- cell buffer ---------- */
+class Scr {
+  constructor(){ this.ch = new Array(COLS*ROWS).fill(" "); this.st = new Array(COLS*ROWS).fill(null); }
+  _set(x,y,c,s){
+    if (x<0||y<0||x>=COLS||y>=ROWS) return;
+    const i=y*COLS+x, old=this.st[i], ns = s ? Object.assign({}, s) : {};
+    if (ns.bg===undefined && old && old.bg!=null) ns.bg = old.bg;
+    this.ch[i]=c; this.st[i]=ns;
+  }
+  put(x,y,text,s){ for (const c of String(text)){ this._set(x,y,c,s); x++; } return x; }
+  seg(x,y,parts){ for (const p of parts){ if (p) x=this.put(x,y,p[0],p[1]); } return x; }
+  right(xr,y,text,s){ const n=len(text); this.put(xr-n,y,text,s); return xr-n; }
+  segRight(xr,y,parts){ const n=parts.reduce((a,p)=>a+(p?len(p[0]):0),0); this.seg(xr-n,y,parts); return xr-n; }
+  fill(x,y,w,h,bg,ch=" "){
+    for (let j=y;j<y+h;j++) for (let i=x;i<x+w;i++){
+      if (i<0||j<0||i>=COLS||j>=ROWS) continue;
+      const k=j*COLS+i; this.ch[k]=ch; this.st[k]= bg==null ? null : {bg};
+    }
+  }
+  hl(x,y,w,c,s){ for (let i=0;i<w;i++) this._set(x+i,y,c,s); }
+  vl(x,y,h,c,s){ for (let j=0;j<h;j++) this._set(x,y+j,c,s); }
+  box(x,y,w,h,s,kind="round"){
+    const K={round:"╭╮╰╯─│",square:"┌┐└┘─│",heavy:"┏┓┗┛━┃"}[kind];
+    this._set(x,y,K[0],s); this._set(x+w-1,y,K[1],s); this._set(x,y+h-1,K[2],s); this._set(x+w-1,y+h-1,K[3],s);
+    this.hl(x+1,y,w-2,K[4],s); this.hl(x+1,y+h-1,w-2,K[4],s); this.vl(x,y+1,h-2,K[5],s); this.vl(x+w-1,y+1,h-2,K[5],s);
+  }
+  key(y){
+    let k=""; for (let x=0;x<COLS;x++){ const i=y*COLS+x, s=this.st[i];
+      k += this.ch[i] + (s ? `${s.fg??""},${s.bg??""}${s.b?"b":""}${s.i?"i":""}${s.u?"u":""}${s.inv?"v":""}` : "") + "|"; }
+    return k;
+  }
+}
+const len = t => [...String(t)].length;
+
+/* ---------- painter ---------- */
+const BOX = { // up,right,down,left : 1 light, 2 heavy
+  "─":[0,1,0,1],"━":[0,2,0,2],"│":[1,0,1,0],"┃":[2,0,2,0],"┌":[0,1,1,0],"┐":[0,0,1,1],"└":[1,1,0,0],"┘":[1,0,0,1],
+  "├":[1,1,1,0],"┤":[1,0,1,1],"┬":[0,1,1,1],"┴":[1,1,0,1],"┼":[1,1,1,1],"┏":[0,2,2,0],"┓":[0,0,2,2],"┗":[2,2,0,0],
+  "┛":[2,0,0,2],"╴":[0,0,0,1],"╶":[0,1,0,0],"╵":[1,0,0,0],"╷":[0,0,1,0],"┣":[2,2,2,0],"┫":[2,0,2,2]
+};
+const QUAD = {"▖":4,"▗":8,"▘":1,"▝":2,"▙":13,"▚":9,"▛":7,"▜":11,"▞":6,"▟":14}; // bits UL1 UR2 LL4 LR8
+const FONT_STACK = 'ui-monospace, "SF Mono", Menlo, Monaco, monospace';
+
+class Painter {
+  constructor(canvas){ this.cv=canvas; this.ctx=canvas.getContext("2d"); this.keys=new Array(ROWS).fill(""); this.wcache=new Map(); }
+  setSize(px, dpr){
+    const c=this.ctx; this.px=px; this.dpr=dpr;
+    c.font = `${px*dpr}px ${FONT_STACK}`;
+    const m = c.measureText("0");
+    const asc = m.fontBoundingBoxAscent || px*dpr*0.93, desc = m.fontBoundingBoxDescent || px*dpr*0.24;
+    this.W = Math.max(2, Math.round(m.width)); this.H = Math.max(4, Math.round(asc+desc));
+    this.base = Math.round(asc);
+    this.cv.width = this.W*COLS; this.cv.height = this.H*ROWS;
+    this.cv.style.width = (this.W*COLS/dpr)+"px"; this.cv.style.height = (this.H*ROWS/dpr)+"px";
+    this.lw = Math.max(1, Math.round(this.W/8));
+    this.keys.fill(""); this.wcache.clear(); this.fontKey=null; /* resizing a canvas resets ctx.font */
+  }
+  paint(scr, prof, force){
+    for (let y=0;y<ROWS;y++){ const k=scr.key(y); if (force || k!==this.keys[y]){ this.keys[y]=k; this.row(scr,y,prof); } }
+  }
+  row(scr,y,prof){
+    const c=this.ctx, W=this.W, H=this.H, top=y*H;
+    const defBg = prof.bg, defFg = X256[prof.fg];
+    for (let x=0;x<COLS;x++){
+      const s=scr.st[y*COLS+x]||{};
+      let bg = s.bg!=null ? X256[s.bg] : defBg, fg = s.fg!=null ? X256[s.fg] : defFg;
+      if (s.inv){ const t=bg; bg=fg; fg=t; }
+      c.fillStyle=bg; c.fillRect(x*W, top, W, H);
+    }
+    for (let x=0;x<COLS;x++){
+      const i=y*COLS+x, ch=scr.ch[i]; const s=scr.st[i]||{};
+      if (ch===" " && !s.u) continue;
+      let bg = s.bg!=null ? X256[s.bg] : defBg, fg = s.fg!=null ? X256[s.fg] : defFg;
+      if (s.inv){ fg=bg; }
+      c.fillStyle=fg; c.strokeStyle=fg;
+      const x0=x*W;
+      if (s.u) c.fillRect(x0, top+H-this.lw*2, W, this.lw);
+      if (ch===" ") continue;
+      if (this.special(ch,x0,top,fg)) continue;
+      const fk=(s.b?"b":"")+(s.i?"i":"");
+      if (fk!==this.fontKey){ c.font=`${s.i?"italic ":""}${s.b?"bold ":""}${this.px*this.dpr}px ${FONT_STACK}`; this.fontKey=fk; }
+      let w=this.wcache.get(fk+ch); if (w===undefined){ w=c.measureText(ch).width; this.wcache.set(fk+ch,w); }
+      c.textAlign="center"; c.textBaseline="alphabetic";
+      if (w > W*1.08){ c.save(); c.translate(x0+W/2, top+this.base); c.scale(W/w,1); c.fillText(ch,0,0); c.restore(); }
+      else c.fillText(ch, x0+W/2, top+this.base);
+    }
+  }
+  special(ch,x,top,fg){
+    const c=this.ctx, W=this.W, H=this.H, cp=ch.codePointAt(0);
+    if (ch==="█"){ c.fillRect(x,top,W,H); return true; }
+    if (cp>=0x2581 && cp<=0x2587){ const h=Math.round(H*(cp-0x2580)/8); c.fillRect(x,top+H-h,W,h); return true; }
+    if (cp>=0x2589 && cp<=0x258F){ const w=Math.round(W*(0x2590-cp)/8); c.fillRect(x,top,w,H); return true; }
+    if (ch==="▀"){ c.fillRect(x,top,W,Math.round(H/2)); return true; }
+    if (ch==="▐"){ const w=Math.round(W/2); c.fillRect(x+W-w,top,w,H); return true; }
+    if (ch==="▔"){ c.fillRect(x,top,W,Math.max(1,Math.round(H/8))); return true; }
+    if (ch==="▕"){ const w=Math.max(1,Math.round(W/8)); c.fillRect(x+W-w,top,w,H); return true; }
+    if (ch==="░"||ch==="▒"||ch==="▓"){ c.globalAlpha={"░":.32,"▒":.5,"▓":.72}[ch]; c.fillRect(x,top,W,H); c.globalAlpha=1; return true; }
+    if (QUAD[ch]){ const b=QUAD[ch], hw=Math.round(W/2), hh=Math.round(H/2);
+      if (b&1) c.fillRect(x,top,hw,hh); if (b&2) c.fillRect(x+hw,top,W-hw,hh);
+      if (b&4) c.fillRect(x,top+hh,hw,H-hh); if (b&8) c.fillRect(x+hw,top+hh,W-hw,H-hh); return true; }
+    if (cp>=0x2800 && cp<=0x28FF){
+      const bits=cp-0x2800, d=Math.max(1,Math.round(W*0.26)), cols=[Math.round(W*0.3-d/2), Math.round(W*0.72-d/2)];
+      const rows=[0.13,0.37,0.61,0.85].map(f=>Math.round(H*f-d/2));
+      const map=[[0,0,1],[0,1,2],[0,2,4],[1,0,8],[1,1,16],[1,2,32],[0,3,64],[1,3,128]];
+      for (const [cx,ry,m] of map) if (bits&m) c.fillRect(x+cols[cx], top+rows[ry], d, d);
+      return true;
+    }
+    const arms=BOX[ch];
+    if (arms){
+      for (let a=0;a<4;a++){ const wt=arms[a]; if (!wt) continue;
+        const lw=this.lw*wt, cx=x+Math.floor((W-lw)/2), cy=top+Math.floor((H-lw)/2);
+        if (a===0) c.fillRect(cx,top,lw,cy-top+lw);
+        if (a===2) c.fillRect(cx,cy,lw,top+H-cy);
+        if (a===3) c.fillRect(x,cy,cx-x+lw,lw);
+        if (a===1) c.fillRect(cx,cy,x+W-cx,lw);
+      }
+      return true;
+    }
+    if ("╭╮╰╯".includes(ch)){
+      const lw=this.lw, mx=x+Math.floor((W-lw)/2)+lw/2, my=top+Math.floor((H-lw)/2)+lw/2, r=W/2;
+      c.lineWidth=lw; c.beginPath();
+      if (ch==="╭"){ c.moveTo(mx,top+H); c.lineTo(mx,my+r); c.arcTo(mx,my,mx+r,my,r); c.lineTo(x+W,my); }
+      if (ch==="╮"){ c.moveTo(x,my); c.lineTo(mx-r,my); c.arcTo(mx,my,mx,my+r,r); c.lineTo(mx,top+H); }
+      if (ch==="╰"){ c.moveTo(mx,top); c.lineTo(mx,my-r); c.arcTo(mx,my,mx+r,my,r); c.lineTo(x+W,my); }
+      if (ch==="╯"){ c.moveTo(mx,top); c.lineTo(mx,my-r); c.arcTo(mx,my,mx-r,my,r); c.lineTo(x,my); }
+      c.stroke(); return true;
+    }
+    return false;
+  }
+}
+
+/* ---------- formatting ---------- */
+const fmt = n => (n==null||isNaN(n)) ? "—" : Math.round(n).toLocaleString("en-US");
+const fmtHs = n => n==null ? "—" : fmt(n)+" H/s";
+const p2 = v => String(v).padStart(2,"0");
+function fmtUp(sec){ sec=Math.max(0,Math.floor(sec)); const h=Math.floor(sec/3600), m=Math.floor(sec%3600/60), s=sec%60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; }
+function fmtClock(sec){ sec=Math.max(0,Math.floor(sec)); return `${Math.floor(sec/3600)}h ${p2(Math.floor(sec%3600/60))}m ${p2(sec%60)}s`; }
+const ago = s => s<60 ? `${s}s ago` : `${Math.floor(s/60)}m ago`;
+const clip = (t,n) => len(t)<=n ? t : [...t].slice(0,Math.max(0,n-1)).join("")+"…";
+const padR = (t,n) => t + " ".repeat(Math.max(0,n-len(t)));
+const padL = (t,n) => " ".repeat(Math.max(0,n-len(t))) + t;
+const EIGHTHS = ["","▏","▎","▍","▌","▋","▊","▉"];
+function bar(scr,x,y,w,frac,s,track,trackCh="█"){
+  frac=Math.max(0,Math.min(1,frac||0)); const e=Math.round(frac*w*8), full=Math.floor(e/8), part=e%8;
+  if (track) scr.hl(x,y,w,trackCh,track);
+  scr.hl(x,y,full,"█",s);
+  if (part && full<w) scr.put(x+full,y,EIGHTHS[part], track && trackCh==="█" ? Object.assign({},s,{bg:track.fg}) : s);
+}
+function lineBar(scr,x,y,w,frac,on,off,chOn="━",chOff="─"){
+  const n=Math.round(Math.max(0,Math.min(1,frac||0))*w); scr.hl(x,y,w,chOff,off); scr.hl(x,y,n,chOn,on);
+}
+function brailleArea(scr,x,y,w,h,vals,lo,hi,s){
+  const need=w*2, v=vals.slice(-need), off=need-v.length, dots=h*4;
+  const bits=[[0x40,0x04,0x02,0x01],[0x80,0x20,0x10,0x08]]; // from bottom dot to top dot
+  for (let cx=0;cx<w;cx++){
+    const lev=[0,1].map(k=>{ const idx=cx*2+k-off; if (idx<0) return 0;
+      return Math.max(1,Math.round((Math.max(lo,Math.min(hi,v[idx]))-lo)/(hi-lo)*dots)); });
+    for (let r=0;r<h;r++){
+      const fromBottom=(h-1-r)*4; let b=0;
+      for (let k=0;k<2;k++) for (let d=0;d<4;d++) if (fromBottom+d < lev[k]) b|=bits[k][d];
+      if (b) scr.put(x+cx,y+r,String.fromCodePoint(0x2800+b),s);
+    }
+  }
+}
+function blockArea(scr,x,y,w,h,vals,lo,hi,styleFor){
+  const v=vals.slice(-w), off=w-v.length;
+  for (let cx=0;cx<v.length;cx++){
+    const e=Math.max(1,Math.round((Math.max(lo,Math.min(hi,v[cx]))-lo)/(hi-lo)*h*8));
+    for (let r=0;r<h;r++){ const fromBottom=h-1-r, f=Math.max(0,Math.min(8,e-fromBottom*8));
+      if (f) scr.put(x+off+cx,y+r, f===8?"█":String.fromCodePoint(0x2580+f), styleFor(r,h)); }
+  }
+}
+
+/* ---------- miner simulation ---------- */
+const JOB = { algo:"rx/0", mode:"fast", threads:10, init:10, pool:"gulf.moneroocean.stream:20016",
+  host:"gulf.moneroocean.stream", port:"20016", worker:"minerv3-m4-16gb", http:"127.0.0.1:18088", donate:"0",
+  version:"6.26.0", cpu:"Apple M4", ram:"16 GB", cores:"4P + 6E", peak:4204, clang:3874,
+  path:"~/Desktop/PROJECTS/XMR MINER", plist:"com.minerv3.xmrig.plist" };
+const CMDS = [
+  ["/usage","Show status, speed, shares, pool, and machine","usage"],
+  ["/config","Show threads, mode, pool, and worker from the job file","config"],
+  ["/logs","Tail the last 40 lines of xmrig.log","logs"],
+  ["/err","Tail the last 40 lines of the error log","err"],
+  ["/open","Open this folder in Finder","open"],
+  ["/bench","Offline thread sweep (~10 min). Never starts mining","bench"],
+  ["/flex","Toggle pool algo switch (off = rx/0 only)","flex"],
+  ["/help","List commands","help"],
+  ["/quit","Quit this UI (does not stop a running miner)","quit"]];
+const ALIAS = {"/stats":"usage","/status":"usage","/plist":"config","/error":"err","/refresh":"usage"};
+const TABS = ["usage","config","logs"];
+
+let seed = 20260912;
+const rnd = () => { seed|=0; seed=seed+0x6D2B79F5|0; let t=Math.imul(seed^seed>>>15,1|seed); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; };
+const gauss = () => (rnd()+rnd()+rnd()-1.5)/0.75;
+const NOW0 = new Date(2026,8,12,12,44,10).getTime(), T0 = performance.now();
+const nowMs = () => NOW0 + (performance.now()-T0);
+const hms = ms => { const d=new Date(ms); return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; };
+const stamp = ms => { const d=new Date(ms); return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${hms(ms)}.${String(d.getMilliseconds()).padStart(3,"0")}`; };
+
+const S = {};
+function scenario(name){
+  seed = 20260912;
+  const now = nowMs();
+  Object.assign(S, { state:name, up:0, hs10:null, hs60:null, hs15:null, max:0, acc:0, rej:0, diff:125113, ping:143,
+    fails:1, height:3774912, ds:100, hist:[], shares:[], lastShare:0, jobs:[], events:[], flex:false,
+    thr:[612,604,598,609,297,293,290,296,288,291], dsMs:6620,
+    last:{ up:58080, acc:1945, rej:0, avg:4166, file:"XMR-miner-summary-2026-09-12_124410.txt", at:now-4000 } });
+  if (name==="running"){
+    S.up=58080; S.t0=now-58080*1000; S.hs10=4178; S.hs60=4062; S.hs15=4166; S.max=4201; S.acc=1945; S.lastShare=12;
+    for (let i=0;i<160;i++){ let v=4150+42*Math.sin(i/9)+gauss()*30; if (i>=118&&i<=125) v=3651+Math.abs(i-121.5)*70+gauss()*20; S.hist.push(v); }
+    S.hist[159]=4178;
+    let n=1945, t=now-12000;
+    for (let i=0;i<12;i++){ S.shares.push({n, ts:t, diff:120000+Math.floor(rnd()*11000), ms:128+Math.floor(rnd()*40)}); n--; t-=19000+rnd()*22000; }
+    S.shares[0].diff=125113; S.shares[0].ms=143;
+    S.jobs=[{ts:now-64000,h:3774912,diff:125113},{ts:now-190000,h:3774911,diff:124870}];
+    const st=now-58080*1000;
+    S.events=[{k:"user",text:"s",ts:st},{k:"start",ts:st+40},{k:"dataset",ts:st+6620},{k:"pool",ts:st+7100},
+      {k:"warn",ts:now-42000,title:"Hashrate dipped to 3,651 H/s for 8 s",sub:"macOS memory compressor was active, recovered on its own"},
+      {k:"shares"}];
+  } else if (name==="starting"){
+    S.up=4; S.t0=now-4000; S.ds=38; S.acc=0; S.fails=0;
+    S.events=[{k:"user",text:"s",ts:now-4000},{k:"start",ts:now-3960},{k:"dsprog"}];
+  } else {
+    S.events=[{k:"user",text:"t",ts:now-4200},{k:"stop",ts:now-4000},{k:"summary",ts:now-3900}];
+    for (let i=0;i<160;i++) S.hist.push(4150+42*Math.sin(i/9)+gauss()*30);
+  }
+}
+function pushEv(e){ e.ts=e.ts||nowMs(); S.events.push(e); if (S.events.length>40) S.events.splice(0,S.events.length-40); }
+function startMining(){
+  if (S.state!=="stopped"){ pushEv({k:"user",text:"s"}); pushEv({k:"note",text:"Already running."}); return; }
+  const last=S.last; scenario("starting"); S.last=last;
+  S.up=0; S.t0=nowMs(); S.ds=0; S.events=[];
+  pushEv({k:"user",text:"s"}); pushEv({k:"start"}); pushEv({k:"dsprog"});
+}
+function stopMining(){
+  if (S.state==="stopped"){ pushEv({k:"user",text:"t"}); pushEv({k:"note",text:"Not running."}); return; }
+  const d=new Date(nowMs());
+  S.last={ up:S.up, acc:S.acc, rej:S.rej, avg:S.hs15||S.hs60||S.hs10||0, at:nowMs(),
+    file:`XMR-miner-summary-${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}_${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}.txt` };
+  Object.assign(S,{state:"stopped",hs10:null,hs60:null,hs15:null});
+  S.events=S.events.filter(e=>e.k!=="shares"&&e.k!=="dsprog");
+  pushEv({k:"user",text:"t"}); pushEv({k:"stop"}); pushEv({k:"summary"});
+}
+function simTick(){
+  if (S.state!=="stopped") S.up=Math.floor((nowMs()-S.t0)/1000); /* wall clock, so a hidden tab doesn't drift */
+  if (S.state==="starting"){
+    S.ds=Math.min(100,S.ds+15+rnd()*6);
+    if (S.ds>=100){
+      S.state="running"; S.dsMs=6200+Math.floor(rnd()*800); S.hs10=900;
+      S.events=S.events.filter(e=>e.k!=="dsprog");
+      pushEv({k:"dataset"}); pushEv({k:"pool"}); pushEv({k:"shares"});
+      S.jobs=[{ts:nowMs(),h:S.height,diff:16000}]; S.diff=16000;
+    }
+    return;
+  }
+  if (S.state!=="running") return;
+  const target=4160+40*Math.sin(S.up/23);
+  S.hs10 = Math.max(600, Math.min(4235, S.hs10+(target-S.hs10)*(S.hs10<3800?0.45:0.35)+gauss()*26));
+  S.hs60 = S.hs60==null ? S.hs10 : S.hs60+(S.hs10-S.hs60)/(S.up<60?Math.max(2,S.up/3):60);
+  if (S.up>=900) S.hs15 = S.hs15==null ? S.hs60 : S.hs15+(S.hs10-S.hs15)/900;
+  S.max=Math.max(S.max,S.hs10); S.hist.push(S.hs10); if (S.hist.length>200) S.hist.shift();
+  S.thr=S.thr.map((v,i)=>{ const base=i<4?606:293; return Math.round(base+(v-base)*0.6+gauss()*4); });
+  S.ping=Math.round(Math.max(118,Math.min(178,S.ping+gauss()*6)));
+  S.lastShare++;
+  if (S.up>6 && rnd()<1/9){
+    if (S.diff<100000) S.diff=Math.round(S.diff*2.1); else S.diff=120000+Math.floor(rnd()*11000);
+    const bad=rnd()<1/500; if (bad) S.rej++; else S.acc++;
+    S.shares.unshift({n:S.acc, ts:nowMs(), diff:S.diff, ms:S.ping, bad}); if (S.shares.length>12) S.shares.pop();
+    S.lastShare=0;
+  }
+  if (rnd()<1/45){ S.height++; S.jobs.unshift({ts:nowMs(),h:S.height,diff:S.diff}); if (S.jobs.length>4) S.jobs.pop(); }
+}
+const pctPeak = () => S.hs10 ? S.hs10/JOB.peak*100 : 0;
+
+/* xmrig.log tail, shaped like XMRig 6.x output */
+function logTail(n){
+  const now=nowMs(), L=[], add=(ts,mod,msg,tone)=>L.push({ts,mod,msg,tone});
+  const boot = t0 => {
+    add(t0,"net",`use pool ${JOB.pool}  TLSv1.3`,"net");
+    add(t0+80,"net",`new job from ${JOB.pool} diff 16000 algo rx/0 height ${S.height}`,"net");
+    add(t0+120,"randomx","init dataset algo rx/0 (10 threads) seed 7c1e04d9…a94d","rx");
+    add(t0+140,"randomx","allocated 2336 MB (2080+256) huge pages 0% 0/1178 +JIT (4 ms)","rx");
+  };
+  if (S.state==="starting"){
+    boot(now-S.up*1000);
+    add(now-300,"randomx",`dataset ${Math.floor(S.ds)}% · building`,"rx");
+  } else if (S.state==="running"){
+    if (S.up<400){ boot(now-S.up*1000); add(now-S.up*1000+S.dsMs,"randomx",`dataset ready (${S.dsMs} ms)`,"rx");
+      add(now-S.up*1000+S.dsMs+40,"cpu","READY threads 10/10 (10) huge pages 0% 0/10 memory 20480 KB (38 ms)","cpu"); }
+    for (const j of S.jobs) add(j.ts,"net",`new job from ${JOB.pool} diff ${j.diff} algo rx/0 height ${j.h}`,"net");
+    for (const s of S.shares) add(s.ts,"cpu",`${s.bad?"rejected":"accepted"} (${s.n}/${S.rej}) diff ${s.diff} (${s.ms} ms)`, s.bad?"bad":"ok");
+    for (let k=0;k<4;k++){ const t=now-((S.up%60)+k*60)*1000; if (now-t < S.up*1000)
+      add(t,"miner",`speed 10s/60s/15m ${(S.hs10||0).toFixed(1)} ${(S.hs60||0).toFixed(1)} ${S.hs15?S.hs15.toFixed(1):"n/a"} H/s max ${S.max.toFixed(1)} H/s`,"speed"); }
+  } else {
+    const t=S.last.at;
+    add(t-61000,"miner",`speed 10s/60s/15m 4171.4 4160.2 ${S.last.avg.toFixed(1)} H/s max 4201.3 H/s`,"speed");
+    add(t-19000,"cpu",`accepted (${S.last.acc}/${S.last.rej}) diff 125113 (143 ms)`,"ok");
+    add(t-200,"signal","Ctrl+C received, exiting","warn");
+    add(t-120,"cpu","stopped (38 ms)","cpu");
+  }
+  L.sort((a,b)=>a.ts-b.ts);
+  return L.slice(-n);
+}
+
+/* ---------- UI state + input ---------- */
+const UI = { d:0, view:"home", buf:"", sel:0, tab:0, err:false, frame:0, blink:true,
+  still: matchMedia("(prefers-reduced-motion: reduce)").matches };
+function matches(){
+  if (!UI.buf.startsWith("/")) return [];
+  const q=UI.buf.slice(1).toLowerCase(); if (!q) return CMDS.slice();
+  const a=[], b=[];
+  for (const c of CMDS){ const nm=c[0].slice(1); if (nm.startsWith(q)) a.push(c); else if (nm.includes(q)||c[1].toLowerCase().includes(q)) b.push(c); }
+  return a.concat(b);
+}
+function runAction(act, label){
+  const echo = () => pushEv({k:"user",text:label});
+  if (act==="usage"||act==="config"||act==="logs"||act==="err"){ UI.view="overlay"; UI.tab=TABS.indexOf(act==="err"?"logs":act); UI.err=act==="err"; UI.buf=""; return; }
+  UI.buf=""; UI.sel=0;
+  if (act==="help"){ UI.buf="/"; return; }
+  echo();
+  if (act==="open") pushEv({k:"note",text:`Opened ${JOB.path} in Finder.`});
+  if (act==="flex"){ S.flex=!S.flex; pushEv({k:"note",text: S.flex ? "flex ON. Next s lets the pool pick the algo (not always XMR)." : "flex OFF. Next s is rx/0 only."}); }
+  if (act==="bench") pushEv({k:"note",text: S.state!=="stopped" ? "Miner is running. Press t, then /bench again." : "Offline sweep: ~10 min, mines nothing. Type yes to run."});
+  if (act==="quit") pushEv({k:"note",text:"This would close the UI. xmrig keeps running if it was on."});
+}
+function onKey(e){
+  const k=e.key; if (e.metaKey||e.ctrlKey||e.altKey) return;
+  let handled=true;
+  if (UI.view==="overlay"){
+    if (k==="Escape"||k==="q") UI.view="home";
+    else if (k==="ArrowLeft") UI.tab=(UI.tab+2)%3;
+    else if (k==="ArrowRight"||k==="Tab") UI.tab=(UI.tab+(e.shiftKey&&k==="Tab"?2:1))%3;
+    else if (k==="1"||k==="2"||k==="3") UI.tab=+k-1;
+    else if (k==="s") startMining(); else if (k==="t") stopMining();
+    else if (k==="e" && TABS[UI.tab]==="logs") UI.err=!UI.err;
+    else handled=false;
+  } else {
+    const ms=matches();
+    if (k==="Escape"){ UI.buf=""; UI.sel=0; }
+    else if (!UI.buf && (k==="s"||k==="S")) startMining();
+    else if (!UI.buf && (k==="t"||k==="T")) stopMining();
+    else if (k==="ArrowUp"){ if (ms.length) UI.sel=(UI.sel-1+ms.length)%ms.length; }
+    else if (k==="ArrowDown"){ if (ms.length) UI.sel=(UI.sel+1)%ms.length; }
+    else if (k==="Tab"){ if (ms.length){ UI.buf=ms[Math.min(UI.sel,ms.length-1)][0]; UI.sel=0; } }
+    else if (k==="Backspace"){ UI.buf=UI.buf.slice(0,-1); UI.sel=0; }
+    else if (k==="Enter"){
+      const t=UI.buf.trim(), sel=ms[Math.min(UI.sel,ms.length-1)];
+      if (!t){ UI.buf=""; }
+      else { const exact=CMDS.find(c=>c[0]===t), act=ALIAS[t]||(exact&&exact[2])||(sel&&t.startsWith("/")&&sel[2]);
+        if (act) runAction(act, exact?exact[0]:(ALIAS[t]?t:sel[0])); else { pushEv({k:"user",text:t}); pushEv({k:"note",text:"Unknown command. Type / for commands."}); UI.buf=""; } }
+      UI.sel=0;
+    }
+    else if (k.length===1){ UI.buf+=k; UI.sel=0; }
+    else handled=false;
+  }
+  if (handled){ e.preventDefault(); UI.blink=true; }
+  return handled;
+}
+/* ============================================================
+   Shared bits for designs
+   ============================================================ */
+const DESIGNS = [];
+const sty = (fg, x) => Object.assign({fg}, x||{});
+function cursorAt(scr,x,y,ch,fg){ if (UI.blink) scr.put(x,y,ch||" ",{fg,inv:true}); }
+function paletteWindow(ms, room){
+  const n=Math.min(ms.length, room), sel=Math.min(UI.sel, Math.max(0,ms.length-1));
+  const start = ms.length>n ? Math.min(Math.max(0, sel-n+1), ms.length-n) : 0;
+  return { rows: ms.slice(start,start+n), start, sel, n };
+}
+/* newest-first activity items used by the stream-style designs */
+function activity(){
+  const out=[];
+  for (const e of S.events){
+    if (e.k==="user") out.push({ts:e.ts,kind:"user",text:e.text});
+    else if (e.k==="start") out.push({ts:e.ts,kind:"start",text:"Started xmrig from the job file",meta:"minerctl start"});
+    else if (e.k==="dataset") out.push({ts:e.ts,kind:"rx",text:`Dataset ready in ${(S.dsMs/1000).toFixed(1)}s · 2336 MB · huge pages 0/1178`,meta:"randomx"});
+    else if (e.k==="pool") out.push({ts:e.ts,kind:"net",text:`Connected to ${JOB.pool} · TLSv1.3`,meta:"net"});
+    else if (e.k==="warn") out.push({ts:e.ts,kind:"warn",text:e.title,meta:"compressor"});
+    else if (e.k==="stop") out.push({ts:e.ts,kind:"stop",text:`Stopped after ${fmtUp(S.last.up)} · ${fmt(S.last.acc)} accepted · ${S.last.rej} rejected`,meta:"minerctl stop"});
+    else if (e.k==="summary") out.push({ts:e.ts,kind:"file",text:`Summary written to ~/Desktop/${S.last.file}`,meta:"desktop"});
+    else if (e.k==="note") out.push({ts:e.ts,kind:"note",text:e.text,meta:""});
+    else if (e.k==="dsprog") out.push({ts:nowMs(),kind:"rx",text:`Building RandomX dataset · ${Math.floor(S.ds)}% of 2.0 GB`,meta:"randomx",live:true});
+  }
+  if (S.state==="running"){
+    for (const s of S.shares) out.push({ts:s.ts,kind:s.bad?"bad":"share",text:`Share ${s.bad?"rejected":"accepted"} · ${s.ms} ms`,meta:`#${fmt(s.n)} · diff ${fmt(s.diff)}`,n:s.n,diff:s.diff,ms:s.ms});
+    for (const j of S.jobs) out.push({ts:j.ts,kind:"job",text:`New job · height ${fmt(j.h)}`,meta:`diff ${fmt(j.diff)}`});
+  }
+  return out.sort((a,b)=>b.ts-a.ts);
+}
+
+/* ============================================================
+   Shared Ledger pieces — every direction here keeps the Ledger
+   transcript, cards, band and footer; they differ in where the
+   live numbers live.
+   ============================================================ */
+const LK = { I:253, D:244, F:240, CY:80, G:114, RR:210, Y:179, BAND:236, HI:231, MID:250, RULE:238, CH:[80,38,37,30,23], CHF:[240,238,237,236,235] };
+const lt = (t,c=LK.I,x)=>[t,sty(c,x)];
+function segClip(scr,x,y,parts,maxx){
+  for (const p of parts){ if (!p) continue; const [t,s]=p; for (const ch of String(t)){ if (x>=maxx) return x; scr.put(x,y,ch,s); x++; } }
+  return x;
+}
+function nowParts(label="now:     "){
+  const {I,D,CY,G,RR,F}=LK;
+  if (S.state==="running"){ const p=pctPeak()/100, n=Math.max(0,Math.min(12,Math.round(p*12)));
+    return [lt(label,D), lt(padR(fmtHs(S.hs10),10)), lt(" [",D), ["█".repeat(n),sty(CY)], ["░".repeat(12-n),sty(F)], lt("] ",D),
+      lt(`${Math.round(pctPeak())}%`,D), lt(" · "), lt(fmt(S.acc)+" ✓",G), ...(S.rej?[lt(" "+S.rej+" ✗",RR)]:[]), lt(" · "+fmtUp(S.up))]; }
+  if (S.state==="starting") return [lt(label,D), lt("building the dataset"), lt(` · ${fmtUp(S.up)} · full speed in about a minute`,D)];
+  return [lt(label,D), lt("not mining"), lt(` · last session ${fmtUp(S.last.up)} · ${fmt(S.last.acc)} ✓ · avg ${fmt(S.last.avg)} H/s`,D)];
+}
+function jobCard(scr,x,y,withNow){
+  const {I,D,F,CY}=LK, h=withNow?8:7;
+  scr.box(x,y,66,h,sty(F));
+  scr.seg(x+2,y+1,[lt(">_ ",CY,{b:true}),lt("XMR Miner",I,{b:true}),lt(` (XMRig ${JOB.version})`,D)]);
+  scr.seg(x+2,y+3,[lt("job:     ",D),lt(`${JOB.algo} ${JOB.mode} · ${JOB.threads} threads`),lt("     /config to view",D)]);
+  scr.seg(x+2,y+4,[lt("pool:    ",D),lt(JOB.pool)]);
+  scr.seg(x+2,y+5,[lt("folder:  ",D),lt(JOB.path)]);
+  if (withNow) segClip(scr,x+2,y+6,nowParts(),x+64);
+  return y+h;
+}
+function ledgerLines(){
+  const {I,D,CY,G,RR,Y}=LK;
+  const L=[], gap=()=>L.push({parts:[]});
+  const bullet=(parts,c=D)=>L.push({parts:[lt("• ",c),...parts]});
+  const tree=(parts,first=true)=>L.push({parts:[lt(first?"  └ ":"    ",D),...parts]});
+  for (const e of S.events){
+    if (e.k==="user"){ L.push({band:true,parts:[lt(" › ",D),lt(e.text)]}); gap(); continue; }
+    if (e.k==="start"){ bullet([lt("Started xmrig",I,{b:true})]); tree([lt("caffeinate -i xmrig -a rx/0 --threads=10 --randomx-mode=fast",D)]); }
+    if (e.k==="dsprog"){ const w=30, n=Math.round(S.ds/100*w);
+      bullet([lt("Building the RandomX dataset",I,{b:true})]);
+      tree([lt(`${padL(String(Math.floor(S.ds)),3)}% of 2.0 GB  `,I),lt("[",D),["█".repeat(n),sty(CY)],["░".repeat(w-n),sty(D)],lt("]",D)]); }
+    if (e.k==="dataset"){ bullet([lt("Dataset ready",I,{b:true}),lt(` in ${(S.dsMs/1000).toFixed(1)} s`)]); tree([lt("2336 MB (2080 + 256) · huge pages 0/1178",D)]); }
+    if (e.k==="pool"){ bullet([lt("Connected",I,{b:true}),lt(" to "+JOB.pool)]); tree([lt(`TLSv1.3 · ${S.ping} ms · worker ${JOB.worker}`,D)]); }
+    if (e.k==="warn"){ bullet([lt(e.title,Y)],Y); tree([lt(e.sub,D)]); }
+    if (e.k==="shares"){
+      bullet([lt("Shares",I,{b:true}),lt("  "),lt(fmt(S.acc),G,{b:true}),lt(" accepted · "),lt(String(S.rej),S.rej?RR:I),lt(" rejected")]);
+      const rows=S.shares.slice(0,4);
+      if (!rows.length) tree([lt("waiting for the first share…",D)]);
+      rows.forEach((s,i)=>tree([lt(padR("#"+fmt(s.n),8),D),lt(hms(s.ts)+"   ",D),lt("diff "+padL(fmt(s.diff),7)+"   ",I),lt(padL(s.ms+" ms",7)+"   ",D),lt(s.bad?"✗":"✓",s.bad?RR:G)],i===0));
+    }
+    if (e.k==="stop"){ bullet([lt("Stopped",I,{b:true}),lt(` after ${fmtUp(S.last.up)}`)]); tree([lt(fmt(S.last.acc),G),lt(` accepted · ${S.last.rej} rejected · avg ${fmt(S.last.avg)} H/s`,D)]); }
+    if (e.k==="summary"){ bullet([lt("Wrote "),lt("~/Desktop/"+S.last.file,CY,{u:true})]); }
+    if (e.k==="note"){ bullet([lt(e.text)]); }
+    gap();
+  }
+  while (L.length && !L[L.length-1].parts.length) L.pop();
+  return L;
+}
+function ledgerDraw(scr,x0,y0,y1,width){
+  const L=ledgerLines(), view=L.slice(-(y1-y0+1));
+  view.forEach((ln,i)=>{ const y=y0+i; if (ln.band) scr.fill(x0,y,width,1,LK.BAND); segClip(scr,x0,y,ln.parts,x0+width); });
+}
+function ledgerCard(title){
+  const {I,D,F,CY,G,RR}=LK, L=[], run=S.state==="running", tot=S.acc+S.rej;
+  const kv=(k,parts)=>L.push([lt("  "+padR(k+":",13),D),...parts]);
+  const br=(f,w,c)=>{ const n=Math.round(Math.max(0,Math.min(1,f))*w); return [lt("[",D),["█".repeat(n),sty(c)],["░".repeat(w-n),sty(F)],lt("]",D)]; };
+  if (title==="usage"){
+    kv("Hashrate",[lt(padR(run?fmtHs(S.hs10):"0 H/s",11)),...br(S.hs10?S.hs10/JOB.peak:0,28,CY),lt(`  ${Math.round(pctPeak())}% of peak`,D)]);
+    kv("Windows",[lt(`10s ${fmt(S.hs10)} · 60s ${fmt(S.hs60)} · 15m ${fmt(S.hs15)} · max ${fmt(S.max||null)}`,run?I:D)]);
+    kv("Shares",[lt(padR(fmt(S.acc)+" ✓",11),G),...br(tot?S.acc/tot:0,28,G),lt(`  ${S.rej} rejected`,D)]);
+    kv("Cadence",[lt(run?`one every ~30 s at diff ${fmt(S.diff)}`:"—",run?I:D)]);
+    L.push([]);
+    kv("Threads",[lt("P ",D),lt(S.thr.slice(0,4).join(" "),run?I:D),lt("  E ",D),lt(S.thr.slice(4).join(" "),run?I:D)]);
+    kv("Dataset",[lt(S.state==="stopped"?"released":S.ds>=100?"2.0 GB ready":`${Math.floor(S.ds)}% of 2.0 GB`),lt(" · huge pages 0/1178",D)]);
+    kv("Pool",[lt(JOB.pool),lt(` · ${run?S.ping+" ms":"—"} · ${S.fails} failure`,D)]);
+    kv("Machine",[lt(`${JOB.cpu} · ${JOB.ram} · XMRig ${JOB.version} arm64`)]);
+    kv("Uptime",[lt(run?fmtClock(S.up):"not running")]);
+  } else if (title==="config"){
+    [["Algorithm",JOB.algo],["Mode",JOB.mode],["Threads",String(JOB.threads)],["Init",String(JOB.init)],["Pool",JOB.pool],["Worker",JOB.worker],
+     ["HTTP API",JOB.http],["Donate",JOB.donate+"%"],["Flex",S.flex?"on":"off"],["Job file",JOB.plist]].forEach(([k,v])=>kv(k,[lt(v)]));
+    L.push([]); L.push([lt("  Edit the plist, then t and s to apply.",D)]);
+  }
+  return L;
+}
+function ledgerOverlay(scr,x0,y0,width){
+  const {I,D,F,CY,G,RR}=LK, tab=TABS[UI.tab];
+  scr.fill(x0,y0,width,1,LK.BAND); segClip(scr,x0,y0,[lt(" › ",D),lt("/"+(tab==="logs"&&UI.err?"err":tab))],x0+width);
+  if (tab==="logs"){
+    segClip(scr,x0,y0+2,[lt("• ",D),lt("Ran",I,{b:true}),lt(` tail -n 20 logs/${UI.err?"xmrig.err.log":"xmrig.log"}`)],x0+width);
+    if (UI.err) scr.put(x0,y0+3,"  └ (no output)",sty(D));
+    else logTail(19).forEach((l,i)=>segClip(scr,x0,y0+3+i,[lt(i?"    ":"  └ ",D),lt(`[${stamp(l.ts)}]  ${padR(l.mod,8)} `,F),lt(l.msg,l.tone==="ok"?G:l.tone==="bad"?RR:D)],x0+width));
+  } else {
+    const body=ledgerCard(tab), w=Math.min(86,width);
+    scr.box(x0,y0+2,w,body.length+4,sty(F));
+    scr.seg(x0+2,y0+3,[lt(">_ ",CY,{b:true}),lt("XMR Miner",I,{b:true}),lt(" · "+tab,D)]);
+    scr.right(x0+w-2,y0+3,"←/→ usage · config · logs",sty(F));
+    body.forEach((parts,i)=>segClip(scr,x0+1,y0+5+i,parts,x0+w-1));
+  }
+}
+function ledgerStatus(scr,x0,y){
+  const {D,HI,MID}=LK;
+  if (S.state==="stopped") return;
+  const word = S.state==="starting" ? "Building dataset" : "Mining", f=UI.still?0:UI.frame;
+  scr.put(x0,y,(f>>3)%2?"•":"◦",sty(D));
+  const hi = UI.still ? -99 : (Math.floor(f/1.5)%(len(word)+8))-4;
+  [...word].forEach((ch,i)=>{ const d=Math.abs(i-hi); scr.put(x0+2+i,y,ch,sty(d===0?HI:d===1?MID:D,{b:d<=1})); });
+  scr.put(x0+3+len(word),y, S.state==="starting" ? `(${fmtUp(S.up)} • t to cancel)` : `(${fmtClock(S.up)} • t to stop)`, sty(D));
+}
+function ledgerBand(scr,x0,y,width){
+  const {I,D}=LK;
+  scr.fill(x0,y,width,3,LK.BAND);
+  scr.put(x0+1,y+1,"›",sty(D));
+  if (UI.buf){ scr.put(x0+3,y+1,UI.buf,sty(I)); cursorAt(scr,x0+3+len(UI.buf),y+1," ",I); }
+  else { const ph = UI.view==="overlay" ? "esc to return · ←/→ next card" : S.state==="stopped" ? "Type / for commands, s to mine" : "Type / for commands, t to stop";
+    scr.put(x0+3,y+1,ph,sty(D)); cursorAt(scr,x0+3,y+1,ph[0],I); }
+}
+function ledgerFooter(scr,y){
+  const {I,D}=LK; let x=1;
+  [["↵","run"],["s","start"],["t","stop"],["/","commands"],["⌃C","quit"]].forEach(([k,l])=>{ x=scr.put(x,y,k,sty(I))+1; x=scr.put(x,y,l,sty(D))+3; });
+  scr.right(COLS-1,y, S.state==="running" ? `${fmtHs(S.hs10)} · ${Math.round(pctPeak())}% of peak` : S.state==="starting" ? `dataset ${Math.floor(S.ds)}%` : "not mining", sty(D));
+}
+function ledgerPalette(scr,x0,y,pn,ms,width){
+  const {I,D,F,CY}=LK;
+  if (!ms.length){ scr.put(x0+2,y,"no matching commands",sty(D)); return; }
+  const w=paletteWindow(ms,pn);
+  w.rows.forEach((c,i)=>{ const on=w.start+i===w.sel; segClip(scr,x0,y+i,[lt(on?"› ":"  ",CY),lt(padR(c[0],12),on?CY:D,{b:on}),lt(c[1],on?I:F)],x0+width); });
+}
+/* share timeline helpers (sim: S.shares holds the last 12; older minutes are seeded) */
+let _bins=null;
+function shareBins(n=30){
+  if (!_bins){ _bins=[]; let s0=seed; seed=7; for (let i=0;i<60;i++) _bins.push(1+Math.floor(rnd()*3.2)); seed=s0; }
+  const now=nowMs(), out=new Array(n).fill(0);
+  for (const s of S.shares){ const m=Math.floor((now-s.ts)/60000); if (m>=0&&m<n) out[n-1-m]++; }
+  for (let i=0;i<n-1;i++) if (!out[i] && (now-(n-1-i)*60000) > S.t0) out[i]=_bins[i];
+  return out;
+}
+function nextShareIn(){ return Math.max(0, 30 - S.lastShare); }
+
+/* ============================================================
+   1 · STRIP — Ledger + an instrument strip under the job card
+   ============================================================ */
+(function(){
+  const {I,D,F,CY,G,RR,Y}=LK;
+  function strip(scr,y){
+    const run=S.state==="running", starting=S.state==="starting", SW=60;
+    // rows y..y+1: sparkline of the last 120 s
+    if (S.hist.length) brailleArea(scr,0,y,SW,2,S.hist,3600,4250,sty(run?CY:F)); else scr.hl(0,y+1,SW,"⣀",sty(F));
+    if (run){
+      scr.seg(63,y,[lt(fmtHs(S.hs10),I,{b:true}),lt(`  ${Math.round(pctPeak())}% of peak`,D)]);
+      scr.seg(63,y+1,[lt(`10s ${fmt(S.hs10)} · 60s ${fmt(S.hs60)} · 15m ${fmt(S.hs15)}`,D)]);
+    } else if (starting){
+      scr.seg(63,y,[lt("building the dataset",I,{b:true}),lt(`  ${Math.floor(S.ds)}%`,D)]);
+      scr.seg(63,y+1,[lt(`${fmtUp(S.up)} · full speed in about a minute`,D)]);
+    } else {
+      scr.seg(63,y,[lt("not mining",I,{b:true}),lt(`  last session avg ${fmt(S.last.avg)} H/s`,D)]);
+      scr.seg(63,y+1,[lt(`${fmtUp(S.last.up)} · ${fmt(S.last.acc)} ✓ · ${S.last.rej} ✗`,D)]);
+    }
+    // row y+2: share ticks, one column = 10 s, last 10 minutes
+    scr.put(0,y+2,"shares ",sty(F));
+    const AX=7, AW=SW-AX; scr.hl(AX,y+2,AW,"·",sty(F));
+    if (run){ const now=nowMs();
+      for (const s of S.shares){ const c=AW-1-Math.floor((now-s.ts)/10000); if (c>=0&&c<AW) scr.put(AX+c,y+2,"│",sty(s.bad?RR:G)); }
+      scr.seg(63,y+2,[lt(fmt(S.acc)+" ✓",G),lt(` · one every ~30 s · next ~${nextShareIn()} s`,D)]);
+    } else scr.put(63,y+2, starting?"first share after the dataset is ready":"no shares while stopped", sty(D));
+  }
+  DESIGNS.push({ id:"strip", name:"Strip", lineage:"Ledger + instrument strip", prof:{bg:"#0f1115",fg:253},
+    render(scr){
+      jobCard(scr,0,1,false);            // rows 1..7
+      strip(scr,9);                      // rows 9..11
+      const pal=UI.buf.startsWith("/") && UI.view!=="overlay", ms=matches(), pn=pal?Math.max(1,Math.min(ms.length,9)):0;
+      if (UI.view==="overlay") ledgerOverlay(scr,0,13,COLS);
+      else ledgerDraw(scr,0,13,(pal?31-pn-1:S.state==="stopped"?31:29),COLS);
+      if (pal) ledgerPalette(scr,0,31-pn+1,pn,ms,COLS); else if (UI.view!=="overlay") ledgerStatus(scr,0,31);
+      ledgerBand(scr,0,32,COLS); ledgerFooter(scr,35);
+    }});
+})();
+
+/* ============================================================
+   2 · RAIL — Ledger transcript + an unpainted telemetry rail
+   ============================================================ */
+(function(){
+  const {I,D,F,CY,G,RR,Y,RULE}=LK;
+  const LW=72, RX=75, RW=34;
+  function label(scr,y,t,right){ scr.put(RX,y,t,sty(D)); if (right) scr.right(RX+RW,y,right,sty(F)); }
+  function rail(scr){
+    const run=S.state==="running", starting=S.state==="starting";
+    scr.vl(LW+1,1,34,"│",sty(RULE));
+    label(scr,1,"hashrate", run?`${Math.round(pctPeak())}% of peak`:"");
+    scr.put(RX,2, run?fmtHs(S.hs10):starting?"warming up":"not mining", sty(I,{b:run}));
+    if (S.hist.length) brailleArea(scr,RX,3,RW,4,S.hist,3600,4250,sty(run?CY:F)); else scr.hl(RX,6,RW,"⣀",sty(F));
+    scr.put(RX,7, run?`10s ${fmt(S.hs10)} · 60s ${fmt(S.hs60)} · 15m ${fmt(S.hs15)}`:`peak ${fmt(JOB.peak)} H/s (sweep)`, sty(D));
+    label(scr,9,"shares", run?`diff ${Math.round(S.diff/1000)}k`:"");
+    scr.seg(RX,10, run||S.state==="stopped" ? [lt(fmt(run?S.acc:S.last.acc)+" ✓",G,{b:true}),lt("  "+(run?S.rej:S.last.rej)+" ✗",(run?S.rej:S.last.rej)?RR:D)] : [lt("—",D)]);
+    const bins=shareBins(30);
+    bins.forEach((n,i)=>scr.put(RX+i,11, run?["▁","▃","▅","▆","█"][Math.min(4,n)]:"▁", sty(run?(n?G:F):F)));
+    scr.put(RX,12, run?`per minute · next ~${nextShareIn()} s`:S.state==="stopped"?"last session":"no shares yet", sty(F));
+    label(scr,14,"threads", JOB.cores);
+    const row=(y,lab,vals,col)=>{ scr.put(RX,y,lab,sty(D));
+      vals.forEach((v,i)=>scr.put(RX+2+i,y, run?(["▁","▂","▃","▄","▅","▆","▇","█"][Math.max(0,Math.min(7,Math.round(v/650*8)-1))]):"▁", sty(run?col:F)));
+      scr.right(RX+RW,y, run?`${fmt(vals.reduce((a,v)=>a+v,0))} H/s`:"—", sty(run?I:F)); };
+    row(15,"P",S.thr.slice(0,4),CY); row(16,"E",S.thr.slice(4),D);
+    label(scr,18,"pool");
+    scr.put(RX,19,JOB.host,sty(I)); scr.put(RX,20,`:${JOB.port} · TLS · ${run?S.ping+" ms":"—"} · ${S.fails} failure`,sty(D));
+    label(scr,22,"dataset", S.state==="stopped"?"released":S.ds>=100?"2.0 GB":`${Math.floor(S.ds)}%`);
+    const dsf=S.state==="stopped"?0:S.ds/100, n=Math.round(dsf*20);
+    scr.seg(RX,23,[lt("[",D),["█".repeat(n),sty(run?CY:Y)],["░".repeat(20-n),sty(F)],lt("]",D),lt(run?" ready":starting?" building":" —",D)]);
+    scr.put(RX,24,"huge pages 0/1178 · 2336 MB",sty(F));
+    label(scr,26,"machine");
+    scr.put(RX,27,`${JOB.cpu} · ${JOB.ram}`,sty(I)); scr.put(RX,28,`XMRig ${JOB.version} arm64 · api :18088`,sty(D));
+    label(scr,30,"session");
+    scr.put(RX,31, run||starting ? `started ${hms(nowMs()-S.up*1000)} · ${fmtUp(S.up)}` : `last ran ${fmtUp(S.last.up)} · ${S.last.file.slice(18,34)}`, sty(D));
+  }
+  DESIGNS.push({ id:"rail", name:"Rail", lineage:"Ledger + telemetry rail", prof:{bg:"#0f1115",fg:253},
+    render(scr){
+      jobCard(scr,0,1,false);
+      rail(scr);
+      const pal=UI.buf.startsWith("/") && UI.view!=="overlay", ms=matches(), pn=pal?Math.max(1,Math.min(ms.length,9)):0;
+      if (UI.view==="overlay") ledgerOverlay(scr,0,9,LW);
+      else ledgerDraw(scr,0,9,(pal?31-pn-1:S.state==="stopped"?31:29),LW);
+      if (pal) ledgerPalette(scr,0,31-pn+1,pn,ms,LW); else if (UI.view!=="overlay") ledgerStatus(scr,0,31);
+      ledgerBand(scr,0,32,LW); ledgerFooter(scr,35);
+    }});
+})();
+
+/* ============================================================
+   3 · METER — the hashrate is the interface; the ledger sits under it
+   ============================================================ */
+(function(){
+  const {I,D,F,CY,G,RR,Y,HI,CH,CHF}=LK;
+  function meter(scr){
+    const run=S.state==="running", starting=S.state==="starting", W=COLS-10;
+    scr.seg(1,1,[lt(">_ ",CY,{b:true}),lt("XMR Miner",I,{b:true}),lt(` (XMRig ${JOB.version})`,D),lt(`   ${JOB.algo} ${JOB.mode} · ${JOB.threads} threads · ${JOB.pool}`,D)]);
+    scr.right(COLS-1,1, run?"● mining":starting?"◐ starting":"○ stopped", sty(run?G:starting?Y:D));
+    if (run){
+      scr.seg(1,3,[lt(fmtHs(S.hs10),HI,{b:true}),lt(`  ${Math.round(pctPeak())}% of peak`,D),lt(`  ·  max ${fmt(S.max)}`,F)]);
+      scr.segRight(COLS-1,3,[lt(fmt(S.acc)+" ✓",G),lt(`  ${S.rej} ✗  ·  ${fmtClock(S.up)}  ·  ${S.ping} ms`,D)]);
+    } else if (starting){
+      scr.seg(1,3,[lt("building the dataset",HI,{b:true}),lt(`  ${Math.floor(S.ds)}% of 2.0 GB  ·  ${fmtUp(S.up)}`,D)]);
+    } else {
+      scr.seg(1,3,[lt("0 H/s",D,{b:true}),lt(`  not mining  ·  last session avg ${fmt(S.last.avg)} H/s · ${fmt(S.last.acc)} ✓ · ${fmtUp(S.last.up)}`,D)]);
+    }
+    // rows 4..8: area chart of the last 100 s (1 sample / s)
+    if (S.hist.length) blockArea(scr,1,4,W,5,S.hist,3600,4250,(r)=>sty((run?CH:CHF)[r]));
+    if (starting){ const n=Math.round(S.ds/100*40); scr.seg(Math.floor((W-44)/2),6,[lt("[",D),["█".repeat(n),sty(CY)],["░".repeat(40-n),sty(F)],lt("]",D)]); }
+    scr.put(W+3,4,"4.25k",sty(F)); scr.put(W+3,6,"3.9k",sty(F)); scr.put(W+3,8,"3.6k",sty(F));
+    // row 9: shares on the same time axis
+    scr.hl(1,9,W,"·",sty(F));
+    if (run){ const now=nowMs(); for (const s of S.shares){ const c=W-1-Math.floor((now-s.ts)/1000); if (c>=0&&c<W) scr.put(1+c,9,"▲",sty(s.bad?RR:G)); } }
+    scr.put(W+3,9,"shares",sty(F));
+  }
+  DESIGNS.push({ id:"meter", name:"Meter", lineage:"Ledger + hashrate meter", prof:{bg:"#0f1115",fg:253},
+    render(scr){
+      meter(scr);                      // rows 1..9
+      const pal=UI.buf.startsWith("/") && UI.view!=="overlay", ms=matches(), pn=pal?Math.max(1,Math.min(ms.length,9)):0;
+      if (UI.view==="overlay") ledgerOverlay(scr,0,11,COLS);
+      else ledgerDraw(scr,0,11,(pal?31-pn-1:S.state==="stopped"?31:29),COLS);
+      if (pal) ledgerPalette(scr,0,31-pn+1,pn,ms,COLS); else if (UI.view!=="overlay") ledgerStatus(scr,0,31);
+      ledgerBand(scr,0,32,COLS); ledgerFooter(scr,35);
+    }});
+})();
+
+/* ============================================================
+   4 · NOW — the Ledger as shipped this afternoon, for comparison
+   ============================================================ */
+(function(){
+  DESIGNS.push({ id:"now", name:"Now: Ledger", lineage:"the current screen, for comparison", prof:{bg:"#0f1115",fg:253},
+    render(scr){
+      jobCard(scr,0,1,true);            // rows 1..8, with the now: row
+      const pal=UI.buf.startsWith("/") && UI.view!=="overlay", ms=matches(), pn=pal?Math.max(1,Math.min(ms.length,9)):0;
+      if (UI.view==="overlay") ledgerOverlay(scr,0,10,COLS);
+      else ledgerDraw(scr,0,10,(pal?31-pn-1:S.state==="stopped"?31:29),COLS);
+      if (pal) ledgerPalette(scr,0,31-pn+1,pn,ms,COLS); else if (UI.view!=="overlay") ledgerStatus(scr,0,31);
+      ledgerBand(scr,0,32,COLS); ledgerFooter(scr,35);
+    }});
+})();
+
+/* ============================================================
+   Notes, comparison
+   ============================================================ */
+const NOTES = {
+  strip:{ lineage:"Ledger + instrument strip · same ink, the one cyan, green for credits",
+    thesis:"Keep everything you have and add three rows under the job card: a two-minute sparkline with the 10s / 60s / 15m windows beside it, and a share timeline — one tick per accepted share over the last ten minutes with the estimated time to the next one. The transcript starts two rows lower; nothing else moves.",
+    moves:[["⣀⣤⣶⣿⣷⣶⣤  4,178 H/s  99% of peak","Braille sparkline: 120 seconds in 60 columns, two rows tall, cyan while mining and faint from the last session while stopped."],
+      ["shares ····│···│····│·│·····  next ~12 s","A time axis under the sparkline; ticks are shares, red for rejected. The number to watch is the next-share estimate."],
+      ["10s 4,178 · 60s 4,062 · 15m 4,166","The three windows XMRig reports, always visible, no /usage needed."],
+      ["everything below is the Ledger","Transcript, cards, band, footer and shimmer are unchanged."]],
+    pal:[[253,"ink"],[244,"secondary"],[240,"axis, empty cells"],[80,"sparkline, prompt mark"],[114,"share ticks, accepted"],[210,"rejected"],[236,"input band"]],
+    facts:[["Background","Only the input band and your own turns"],["At 80×24","Works; the strip keeps 60 columns, the labels beside it fold under it"],["Build effort","Small: a sparkline and a tick axis on top of what exists"],["Watch out","Braille cells need a font that has them (Menlo and SF Mono do)"]] },
+  rail:{ lineage:"Ledger + telemetry rail · Cockpit's always-on numbers without its painted slate",
+    thesis:"The transcript keeps the left 72 columns; a quiet rail on the right carries what you would otherwise type /usage for: hashrate with a four-row sparkline, shares per minute for the last half hour, P- and E-core load, pool, dataset, machine and session. Nothing is painted — it is text and a hairline, so it still reads as a terminal.",
+    moves:[["hashrate                 99% of peak\n4,178 H/s\n⣠⣴⣾⣿⣿⣷⣦⣄  ","Label in grey, value in ink, sparkline under it: the rail is a column of small ledgers."],
+      ["▁▃▅▆█▃▁▅  per minute · next ~12 s","Thirty one-column bars: shares per minute. Gaps are visible before they become a problem."],
+      ["P ▆▆▇▆  2,423 H/s\nE ▃▃▃▃▃▃  1,755 H/s","Per-thread load as bars, summed per core class, straight from /2/backends."],
+      ["│ hairline at column 72","The only chrome added. Below 100 columns the rail folds away and the Strip layout takes over."]],
+    pal:[[253,"ink"],[244,"labels"],[240,"axes, empty bars"],[238,"hairline"],[80,"sparkline, P-core bars"],[114,"accepted, per-minute bars"],[210,"rejected"],[179,"warming"]],
+    facts:[["Background","Only the input band, which now spans the left pane"],["At 80×24","No: the rail needs ≥ 100 columns; it collapses to the Strip"],["Build effort","Medium: a second column with its own layout and the fold rule"],["Watch out","The rail repaints every second; keep the synchronized-update escape and the frame diff you already have"]] },
+  meter:{ lineage:"Ledger + hashrate meter · Monolith's idea in Ledger's clothes",
+    thesis:"For a window left open across the room. The job card becomes one line; the top third is a meter: the hashrate as a bold headline with % of peak, shares, uptime and ping on the right, a five-row area chart of the last 100 seconds in cyan shades, and share markers on the chart's own time axis. The ledger runs underneath with fewer rows.",
+    moves:[["4,178 H/s  99% of peak            1,945 ✓  0 ✗ · 16h 08m 12s · 143 ms","One headline row carries everything /usage's first four lines say."],
+      ["▁▂▃▅▆▇█  five rows, 100 columns","Area chart in five cyan shades (80 → 23); faint greys for the last session while stopped."],
+      ["·····▲······▲···▲·····▲·","Shares drop onto the same axis, so a quiet chart with no markers is immediately visible."],
+      ["[████████░░░░] 38% of 2.0 GB","While starting, the dataset bar sits where the chart will be."]],
+    pal:[[253,"ink"],[231,"headline"],[244,"secondary"],[240,"axis"],[80,"chart top"],[38,"chart"],[30,"chart"],[23,"chart base"],[114,"share markers"],[210,"rejected"]],
+    facts:[["Background","Only the input band and your own turns"],["At 80×24","Tight: the chart shrinks to two rows and the transcript to ~6"],["Build effort","Medium: block-area chart and the marker axis"],["Watch out","The headline dominates; if you prefer the transcript to lead, take Strip"]] },
+  now:{ lineage:"the current screen · Ledger with the now: row, as in bin/miner-ui.py this afternoon",
+    thesis:"Here for comparison. Job card with the live now: row, transcript, cards, band, footer, shimmer. The three directions above keep all of it and add a way to see the numbers without typing.",
+    moves:[["now:     4,178 H/s [████████████] 99% · 1,945 ✓ · 16h 8m","The one live line you have today."],["• Shares  1,945 accepted · 0 rejected\n  └ #1,945  16:19:21  diff 125,113  143 ms ✓","The ledger rows now read real latency from xmrig.log."]],
+    pal:[[253,"ink"],[244,"secondary"],[240,"card border"],[80,"commands, prompt mark"],[114,"accepted"],[210,"rejected"],[236,"input band"]],
+    facts:[["Background","Only the input band and your own turns"],["At 80×24","Works; the card collapses to 3 rows"],["Build effort","Done"],["Watch out","Least at-a-glance of the four"]] }
+};
+const CMP = [
+  ["Layout",["Card + strip + transcript","Transcript + right rail","Meter + transcript","Card + transcript"]],
+  ["Live numbers",["Sparkline, windows, share ticks","Whole rail, always","Headline + chart + markers","now: row, footer"]],
+  ["Color",["Ink + cyan","Ink + cyan","Ink + cyan shades","Ink + cyan"]],
+  ["Paints background",["Input band","Input band (left pane)","Input band","Input band"]],
+  ["80 × 24",["Yes","No (needs 100+)","Tight","Yes"]],
+  ["Build effort",["Small","Medium","Medium","—"]],
+  ["Pick it if you",["want the least change","never want to type /usage","glance at it from across the room","are happy as is"]]
+];
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+const $ = id => document.getElementById(id);
+const cv=$("cv"), term=$("term"), P=new Painter(cv);
+const off=document.createElement("canvas"), OP=new Painter(off);
+const thumbs=[];
+let dirty=true;
+
+function renderNotes(){
+  const d=DESIGNS[UI.d], n=NOTES[d.id];
+  $("notes").innerHTML =
+    `<div><h2>${UI.d+1} · ${esc(d.name)}</h2><p class="lineage">${esc(n.lineage)}</p><p>${esc(n.thesis)}</p>
+      <ul class="moves">${n.moves.map(([g,t])=>`<li><code>${esc(g).replace(/\n/g,"<br>")}</code><span>${esc(t)}</span></li>`).join("")}</ul></div>
+     <div class="side"><div class="k">Palette · xterm-256 index, as Terminal.app draws it</div>
+      <div class="sw">${n.pal.map(([i,role])=>`<div><b style="background:${X256[i]}"></b><span>${i} · ${X256[i]}</span><small>${esc(role)}</small></div>`).join("")}</div>
+      <dl class="facts">${n.facts.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl></div>`;
+  $("cmp").innerHTML = `<thead><tr><th></th>${DESIGNS.map((x,i)=>`<th class="${i===UI.d?"on":""}">${i+1} ${esc(x.name)}</th>`).join("")}</tr></thead>
+    <tbody>${CMP.map(([k,v])=>`<tr><th>${esc(k)}</th>${v.map((c,i)=>`<td class="${i===UI.d?"on":""}">${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody>`;
+}
+function select(i){
+  UI.d=i; dirty=true; P.keys.fill("");
+  document.querySelectorAll(".pick").forEach((b,j)=>b.setAttribute("aria-pressed", String(j===i)));
+  term.style.background = DESIGNS[i].prof.bg;
+  $("wtitle").textContent = `XMR MINER — python3 miner-ui.py — ${DESIGNS[i].name} — 110×36`;
+  renderNotes();
+}
+function syncButtons(){
+  document.querySelectorAll("#scen button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.s===S.state)));
+  const v = UI.view==="overlay" ? TABS[UI.tab] : UI.buf.startsWith("/") ? "palette" : "home";
+  document.querySelectorAll("#scr button").forEach(b=>b.setAttribute("aria-pressed", String(b.dataset.v===v)));
+}
+function fit(){
+  const lab=document.querySelector(".lab"), cs=getComputedStyle(lab);
+  const avail = lab.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 20;
+  const c=P.ctx; c.font=`100px ${FONT_STACK}`; const r=c.measureText("0").width/100;
+  const px=Math.max(5, Math.min(14, Math.floor(avail/(COLS*r)*4)/4));
+  P.setSize(px, window.devicePixelRatio||1); dirty=true;
+}
+function drawThumbs(){
+  DESIGNS.forEach((d,i)=>{
+    const scr=new Scr(); try { d.render(scr); } catch(e){}
+    OP.paint(scr, d.prof, true);
+    const t=thumbs[i]; if (t.width!==off.width/2){ t.width=off.width/2; t.height=off.height/2; }
+    const x=t.getContext("2d"); x.imageSmoothingQuality="high"; x.drawImage(off,0,0,t.width,t.height);
+  });
+}
+
+DESIGNS.forEach((d,i)=>{
+  const b=document.createElement("button"); b.className="pick"; b.type="button";
+  b.innerHTML=`<canvas aria-hidden="true"></canvas><span class="n">${i+1}</span><span class="nm">${esc(d.name)}</span><span class="ln">${esc(d.lineage)}</span>`;
+  b.addEventListener("click",()=>select(i));
+  $("picks").appendChild(b); thumbs.push(b.querySelector("canvas"));
+});
+document.querySelectorAll("#scen button").forEach(b=>b.addEventListener("click",()=>{
+  scenario(b.dataset.s); UI.buf=""; UI.sel=0; dirty=true; syncButtons(); drawThumbs();
+}));
+document.querySelectorAll("#scr button").forEach(b=>b.addEventListener("click",()=>{
+  const v=b.dataset.v; UI.sel=0; UI.err=false;
+  if (v==="home"){ UI.view="home"; UI.buf=""; }
+  else if (v==="palette"){ UI.view="home"; UI.buf="/"; }
+  else { UI.view="overlay"; UI.tab=TABS.indexOf(v); UI.buf=""; }
+  dirty=true; syncButtons(); drawThumbs(); term.focus({preventScroll:true});
+}));
+term.addEventListener("keydown",e=>{ if (onKey(e)){ dirty=true; syncButtons(); } });
+term.addEventListener("mousedown",()=>term.focus({preventScroll:true}));
+document.addEventListener("keydown",e=>{
+  if (document.activeElement===term || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/^[1-4]$/.test(e.key)){ select(+e.key-1); }
+});
+window.addEventListener("resize",()=>{ clearTimeout(fit.t); fit.t=setTimeout(fit,120); });
+
+scenario("running");
+OP.setSize(7,2);
+fit(); select(0); syncButtons(); drawThumbs();
+
+let lastTick=performance.now(), lastThumb=0, lastBlink=0, lastFrame=-1;
+function loop(t){
+  if (t-lastTick>=1000){ lastTick = t-lastTick>4000 ? t : lastTick+1000; simTick(); syncButtons(); dirty=true; }
+  if (!UI.still && t-lastBlink>=530){ UI.blink=!UI.blink; lastBlink=t; dirty=true; }
+  const f = UI.still ? 0 : Math.floor(t/90);
+  if (f!==lastFrame){ lastFrame=f; UI.frame=f; if (S.state!=="stopped") dirty=true; }
+  if (dirty){
+    dirty=false;
+    const scr=new Scr(), d=DESIGNS[UI.d];
+    try { d.render(scr); } catch(err){ console.error(err); scr.put(1,1,"render error: "+err.message,{fg:203}); }
+    P.paint(scr, d.prof);
+  }
+  if (t-lastThumb>=1000){ lastThumb=t; drawThumbs(); }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

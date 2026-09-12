@@ -1,0 +1,3 @@
+[submodule "lab/RandomX"]
+	path = lab/RandomX
+	url = https://github.com/tevador/RandomX.git

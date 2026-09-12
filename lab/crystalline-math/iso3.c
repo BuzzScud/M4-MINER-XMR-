@@ -1,0 +1,22 @@
+#include "math/abacus.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#define B 65536u
+static void fix(CrystallineAbacus*x){ if(x->is_sparse) abacus_densify(x); int32_t mx=0,mn=0; int first=1; for(size_t i=0;i<x->num_beads;i++){int32_t w=x->beads[i].weight_exponent; if(first){mx=mn=w;first=0;} if(w>mx)mx=w; if(w<mn)mn=w;} x->max_exponent=mx; x->min_exponent=mn; }
+static void p(const char*n,CrystallineAbacus*x){uint64_t v=0;MathError e=abacus_to_uint64(x,&v);printf("  %s: err=%d val=%016llx beads=%zu exp[%d..%d] neg=%d\n",n,e,(unsigned long long)v,x->num_beads,x->min_exponent,x->max_exponent,x->negative);}
+static CrystallineAbacus* two64(){CrystallineAbacus*t=abacus_from_uint64(1ULL<<32,B),*r=abacus_new(B);abacus_mul(r,t,t);fix(r);abacus_free(t);return r;}
+int main(int argc,char**argv){ setvbuf(stdout,NULL,_IONBF,0); const char*t=argv[1];
+  uint64_t a=0xDEADBEEFCAFEBABEULL,b=0x0123456789ABCDEFULL; __uint128_t pp=(__uint128_t)a*b;
+  CrystallineAbacus *A=abacus_from_uint64(a,B),*Bb=abacus_from_uint64(b,B),*R=abacus_new(B),*Q=abacus_new(B),*P=abacus_new(B);
+  printf("[%s]\n",t);
+  if(!strcmp(t,"two64_fixed")){ CrystallineAbacus*x=two64(); p("2^64",x); printf("  beads: "); for(size_t i=0;i<x->num_beads;i++) printf("(v=%u w=%d) ",x->beads[i].value,x->beads[i].weight_exponent); printf("\n"); }
+  if(!strcmp(t,"cmp_fixed")){ CrystallineAbacus*x=two64(); abacus_add(R,A,A); fix(R); printf("  cmp(A+A,2^64)=%d (expect 1)  cmp(2^64,A+A)=%d\n",abacus_compare(R,x),abacus_compare(x,R)); abacus_sub(Q,R,x); fix(Q); p("A+A-2^64",Q); printf("  native=%016llx\n",(unsigned long long)(a+a)); }
+  if(!strcmp(t,"div_fixed")){ abacus_mul(P,A,Bb); fix(P); CrystallineAbacus*x=two64(); MathError e=abacus_div(Q,R,P,x); fix(Q); fix(R); printf("  err=%d\n",e); p("q",Q); p("r",R); printf("  native hi=%016llx lo=%016llx\n",(unsigned long long)(pp>>64),(unsigned long long)pp); }
+  if(!strcmp(t,"mod_fixed")){ abacus_mul(P,A,Bb); fix(P); CrystallineAbacus*x=two64(); MathError e=abacus_mod(R,P,x); fix(R); printf("  err=%d\n",e); p("r",R); }
+  if(!strcmp(t,"sqrt_fixed")){ CrystallineAbacus*x=two64(),*big=abacus_new(B),*s=abacus_new(B); abacus_mul(big,x,x); fix(big); MathError e=abacus_sqrt(s,big); fix(s); printf("  err=%d cmp(sqrt(2^128),2^64)=%d (expect 0)\n",e,abacus_compare(s,x)); CrystallineAbacus*n=abacus_from_uint64(0xFFFFFFFFFFFFFFFFULL,B),*sq=abacus_new(B),*r2=abacus_new(B); abacus_mul(sq,n,n); fix(sq); e=abacus_sqrt(r2,sq); fix(r2); p("sqrt((2^64-1)^2)",r2); }
+  if(!strcmp(t,"mul_lo_hi_fixed")){ abacus_mul(P,A,Bb); fix(P); CrystallineAbacus*H=abacus_new(B),*L=abacus_new(B),*x=two64(),*HH=abacus_new(B); abacus_shift_right(H,P,4); fix(H); abacus_mul(HH,H,x); fix(HH); abacus_sub(L,P,HH); fix(L); p("hi",H); p("lo",L); printf("  native hi=%016llx lo=%016llx\n",(unsigned long long)(pp>>64),(unsigned long long)pp); }
+  if(!strcmp(t,"shr_frac_fixed")){ /* does shift_right of a base-65536 number by more digits than it has create fractions? */ CrystallineAbacus*y=abacus_new(B); abacus_shift_right(y,A,6); fix(y); p("A>>96digits",y); printf("  beads: "); for(size_t i=0;i<y->num_beads;i++) printf("(v=%u w=%d) ",y->beads[i].value,y->beads[i].weight_exponent); printf("\n"); }
+  if(!strcmp(t,"div_frac")){ /* integer division truncation semantics */ CrystallineAbacus*seven=abacus_from_uint64(7,B),*two=abacus_from_uint64(2,B); abacus_div(Q,R,seven,two); fix(Q); fix(R); p("7/2 q",Q); p("7/2 r",R); CrystallineAbacus*neg=abacus_new(B); abacus_sub(neg,two,seven); fix(neg); abacus_div(Q,R,neg,two); fix(Q); fix(R); p("-5/2 q",Q); p("-5/2 r",R); }
+  if(!strcmp(t,"base2_big")){ /* base-2 abacus with 200 bits: shifts + add + mul */ CrystallineAbacus*m=abacus_from_uint64(0x1FFFFFFFFFFFFFULL,2),*s=abacus_new(2),*m2=abacus_new(2),*p2=abacus_new(2); abacus_shift_left(s,m,100); fix(s); abacus_mul(p2,m,m); fix(p2); printf("  m<<100: beads=%zu exp[%d..%d]  m*m beads=%zu exp[%d..%d]\n",s->num_beads,s->min_exponent,s->max_exponent,p2->num_beads,p2->min_exponent,p2->max_exponent); __uint128_t mm=(__uint128_t)0x1FFFFFFFFFFFFFULL*0x1FFFFFFFFFFFFFULL; uint64_t lo=0,hi=0; for(size_t i=0;i<p2->num_beads;i++){int32_t w=p2->beads[i].weight_exponent; if(!p2->beads[i].value)continue; if(w<64) lo|=1ULL<<w; else if(w<128) hi|=1ULL<<(w-64);} printf("  m*m = %016llx%016llx native %016llx%016llx\n",(unsigned long long)hi,(unsigned long long)lo,(unsigned long long)(mm>>64),(unsigned long long)mm); }
+  printf("  done\n"); return 0; }
