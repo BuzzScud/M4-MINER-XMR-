@@ -38,7 +38,10 @@ UNDER = "\033[4m"
 REV = "\033[7m"
 HIDE = "\033[?25l"
 SHOW = "\033[?25h"
-CLEAR = "\033[2J\033[H"
+HOME = "\033[H"
+EL = "\033[K"
+SYNC_BEGIN = "\033[?2026h"
+SYNC_END = "\033[?2026l"
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,15 @@ def trunc(s: Optional[str], n: int) -> str:
     # slice by visible chars, keep no ansi in trunc'd tail
     plain = _ANSI.sub("", s)
     return plain[: n - 1] + "~"
+
+
+def clip_row(s: Optional[str], width: int) -> str:
+    """Visible width `width`, spaces on the right so in-place redraws do not leave ghosts."""
+    s = trunc(s, width)
+    pad = width - vis_len(s)
+    if pad > 0:
+        s += " " * pad
+    return s
 
 
 def short_path(path: str, n: int) -> str:
@@ -175,7 +187,7 @@ def parse_job(path: str = PLIST) -> dict:
 
 def api_summary() -> Optional[dict]:
     try:
-        with urllib.request.urlopen(API, timeout=1.2) as r:
+        with urllib.request.urlopen(API, timeout=0.6) as r:
             return json.load(r)
     except Exception:
         return None
@@ -192,7 +204,27 @@ def ctl_status() -> tuple[str, list[str]]:
     return lines[0].strip(), lines[1:]
 
 
+def xmrig_up() -> bool:
+    try:
+        r = subprocess.run(
+            ["pgrep", "-x", "xmrig"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_CPU_INFO: Optional[tuple[str, str]] = None
+
+
 def cpu_info() -> tuple[str, str]:
+    global _CPU_INFO
+    if _CPU_INFO is not None:
+        return _CPU_INFO
+
     def sysctl(k: str) -> str:
         try:
             return subprocess.check_output(["sysctl", "-n", k], text=True, timeout=1).strip()
@@ -205,7 +237,8 @@ def cpu_info() -> tuple[str, str]:
         ram_s = f"{ram} GB" if ram else "-"
     except Exception:
         ram_s = "-"
-    return brand, ram_s
+    _CPU_INFO = (brand, ram_s)
+    return _CPU_INFO
 
 
 def bar(pct: float, width: int, color: str = BLUE) -> str:
@@ -323,6 +356,8 @@ class App:
     confirm_buf: str = ""
     started: float = field(default_factory=time.time)
     last_draw: float = 0.0
+    last_frame: str = ""
+    frame: Optional[list] = field(default=None)
     fd: int = 0
     old_tty: Optional[list] = None
     dump: bool = False
@@ -337,7 +372,18 @@ class App:
             self.cols, self.rows = 80, 24
 
     def write(self, s: str) -> None:
-        sys.stdout.write(s.replace("\n", "\r\n") if not self.dump else s)
+        if self.dump:
+            sys.stdout.write(s)
+            return
+        s = s.replace("\n", "\r\n")
+        if self.frame is not None:
+            self.frame.append(s)
+        else:
+            sys.stdout.write(s)
+
+    def row(self, s: str = "") -> str:
+        out = clip_row(s, self.cols)
+        return out if self.dump else out + EL
 
     def matches(self) -> list[Cmd]:
         src = self.force_palette if self.force_palette is not None else self.buf
@@ -351,9 +397,15 @@ class App:
         return ms[i]
 
     def live(self) -> dict:
-        state, extra = ctl_status()
         job = parse_job()
-        api = api_summary() if state in ("RUNNING", "STARTING") else None
+        api = api_summary()
+        extra: list[str] = []
+        if api:
+            state = "RUNNING"
+        elif xmrig_up():
+            state = "STARTING"
+        else:
+            state = "STOPPED"
         hs = None
         highest = PEAK_HS
         acc = rej = 0
@@ -445,10 +497,10 @@ class App:
         body_h = max(1, rows - head_h - pal_n - prompt_h - (1 if pal_n else 0))
 
         if not self.dump:
-            self.write(CLEAR + HIDE)
+            self.write(HIDE)
         for ln in head:
-            self.write(ln + "\n")
-        self.write("\n")
+            self.write(self.row(ln) + "\n")
+        self.write(self.row("") + "\n")
 
         body = list(self.body)
         if not body:
@@ -457,7 +509,7 @@ class App:
         while len(shown) < body_h:
             shown.append("")
         for ln in shown:
-            self.write(trunc(ln, cols) + "\n")
+            self.write(self.row(ln) + "\n")
 
         if pal_n:
             start = 0
@@ -481,7 +533,7 @@ class App:
         """Claude-style rounded input field with placeholder and status line."""
         inner = max(24, self.cols - 3)
         box = DIM
-        self.write(f" {box}╭{'─' * inner}╮{RESET}\n")
+        self.write(self.row(f" {box}╭{'─' * inner}╮{RESET}") + "\n")
         self.write(f" {box}│{RESET} {ORANGE}>{RESET} ")
         room = max(1, inner - 3)
         vis = text if len(text) <= room else text[-room:]
@@ -494,9 +546,9 @@ class App:
             extra_n = len(extra)
             self.write(f"{DIM}{extra}{RESET}")
         pad = max(0, inner - 3 - len(vis) - extra_n)
-        self.write(" " * pad + f"{box}│{RESET}\n")
-        self.write(f" {box}╰{'─' * inner}╯{RESET}\n")
-        self.write(footer)
+        self.write(" " * pad + f"{box}│{RESET}" + ("" if self.dump else EL) + "\n")
+        self.write(self.row(f" {box}╰{'─' * inner}╯{RESET}") + "\n")
+        self.write(self.row(footer))
         if not self.dump:
             self.write("\033[u")
             self.write(SHOW)
@@ -518,7 +570,7 @@ class App:
                 row = f"{indent}{ORANGE}{name}{RESET}  {WHITE}{desc}{RESET}"
             else:
                 row = f"{indent}{DIM}{name}{RESET}  {DIM}{desc}{RESET}"
-            self.write(row + "\n")
+            self.write(self.row(row) + "\n")
 
     def kv(self, k: str, v: str, key_w: int = 24) -> str:
         return f"  {DIM}{k:<{key_w}}{RESET}{v}"
@@ -526,33 +578,31 @@ class App:
     def draw_overlay(self, live: dict) -> None:
         cols, rows = self.cols, self.rows
         tab = TABS[self.tab]
-        if not self.dump:
-            self.write(CLEAR + HIDE)
-        parts = []
-        for i, name in enumerate(TABS):
-            if i == self.tab:
-                parts.append(f"{BOLD}{UNDER}{WHITE}{name}{RESET}")
-            else:
-                parts.append(f"{DIM}{name}{RESET}")
-        self.write("  " + "   ".join(parts) + "\n")
-        self.write(f"{BLUE}{'─' * cols}{RESET}\n")
         if tab == "Usage":
             lines = self.tab_usage(live)
         elif tab == "Config":
             lines = self.tab_config(live)
         else:
             lines = self.tab_logs()
+        parts = []
+        for i, name in enumerate(TABS):
+            if i == self.tab:
+                parts.append(f"{BOLD}{UNDER}{WHITE}{name}{RESET}")
+            else:
+                parts.append(f"{DIM}{name}{RESET}")
         footer = f"  {DIM}← → tabs · s start · t stop · Esc to cancel{RESET}"
         room = max(3, rows - 4)
         vis = lines[:room]
         while len(vis) < room:
             vis.append("")
-        for ln in vis:
-            self.write(trunc(ln, cols) + "\n")
-        self.write(footer)
         if not self.dump:
             self.write(HIDE)
-        else:
+        self.write(self.row("  " + "   ".join(parts)) + "\n")
+        self.write(self.row(f"{BLUE}{'─' * cols}{RESET}") + "\n")
+        for ln in vis:
+            self.write(self.row(ln) + "\n")
+        self.write(self.row(footer))
+        if self.dump:
             self.write("\n")
 
     def tab_config(self, live: dict) -> list[str]:
@@ -668,17 +718,20 @@ class App:
 
     def draw_confirm(self) -> None:
         if not self.dump:
-            self.write(CLEAR + HIDE)
-        self.write(f"\n  {BOLD}Offline sweep{RESET}\n")
-        self.write(f"  {DIM}~10 minutes. Mines nothing. Refuses if the miner is running.{RESET}\n\n")
+            self.write(HIDE)
+        self.write(self.row("") + "\n")
+        self.write(self.row(f"  {BOLD}Offline sweep{RESET}") + "\n")
+        self.write(self.row(f"  {DIM}~10 minutes. Mines nothing. Refuses if the miner is running.{RESET}") + "\n")
+        self.write(self.row("") + "\n")
         self.draw_prompt_box(
             self.confirm_buf,
             "yes",
             f"  {ORANGE}›› type yes to run{RESET} {DIM}· esc cancel{RESET}",
         )
 
-    def draw(self) -> None:
+    def draw(self, force: bool = True) -> None:
         self.size()
+        self.frame = None if self.dump else []
         try:
             live = self.live()
             if self.mode == "overlay":
@@ -691,13 +744,25 @@ class App:
             if self.dump:
                 raise
             try:
-                self.write(CLEAR + HIDE)
+                self.frame = []
                 self.write(f"  {RED}UI error{RESET}  {e}\n")
                 self.write(f"  {DIM}redraws every second · miner is not stopped by this.{RESET}")
             except Exception:
-                pass
-        sys.stdout.flush()
+                self.frame = []
+        self._flush_frame(force)
+
+    def _flush_frame(self, force: bool) -> None:
         self.last_draw = time.time()
+        if self.dump:
+            sys.stdout.flush()
+            return
+        body = "".join(self.frame or [])
+        self.frame = None
+        if not force and body == self.last_frame:
+            return
+        self.last_frame = body
+        sys.stdout.write(HIDE + SYNC_BEGIN + HOME + body + SYNC_END)
+        sys.stdout.flush()
 
     def open_overlay(self, tab_name: str, log_which: str = "log") -> None:
         if tab_name in TABS:
@@ -963,9 +1028,9 @@ class App:
             while True:
                 key = self.read_key()
                 if key is None:
-                    # live refresh while running / starting / overlay
+                    # live refresh; in-place redraw so the window does not flash
                     if time.time() - self.last_draw >= 1.0:
-                        self.draw()
+                        self.draw(force=False)
                     continue
                 ok = True
                 if self.mode == "overlay":
@@ -1049,11 +1114,20 @@ def self_test() -> int:
     check("input box bottom", "╰" in home and "╯" in home)
     check("placeholder", 'try "/usage"' in home)
     check("status chevrons", "››" in home)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        dump_frame("usage")
+    check("usage dump no full clear", "\033[2J" not in buf.getvalue())
+    check("clip_row pads", vis_len(clip_row("ab", 5)) == 5 and clip_row("ab", 5).endswith("   "))
     plain = _ANSI.sub("", home)
     title = next((ln for ln in plain.splitlines() if "XMR Miner" in ln), "")
     spec = next((ln for ln in plain.splitlines() if "RandomX" in ln), "")
     using = next((ln for ln in plain.splitlines() if "Using rx/0" in ln), "")
-    check("title has badge", title.startswith(" ● XMR Miner") and title.rstrip().endswith("STOPPED"))
+    check(
+        "title has badge",
+        title.startswith(" ● XMR Miner")
+        and title.rstrip().endswith(("STOPPED", "RUNNING", "STARTING")),
+    )
     check("spec indent", spec.startswith("   RandomX"))
     check("using bar col", using.startswith(" │ Using") or using.startswith(" │ Using"))
     tcol = title.index("X")
