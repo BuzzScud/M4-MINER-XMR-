@@ -49,7 +49,7 @@ class Cmd:
 
 
 COMMANDS = (
-    Cmd("/usage", "Show speed, shares, uptime, and activity stats", "usage"),
+    Cmd("/usage", "Show speed, shares, hashrate windows, pool, and machine", "usage"),
     Cmd("/status", "Show miner status, pool, and live hashrate", "status"),
     Cmd("/config", "Show threads, mode, pool, and worker from the job file", "config"),
     Cmd("/logs", "Tail the last 40 lines of xmrig.log", "logs"),
@@ -74,7 +74,7 @@ ALIASES = {
     "?": "help",
 }
 
-TABS = ("Status", "Config", "Usage", "Logs", "Stats")
+TABS = ("Status", "Config", "Usage", "Logs")
 
 
 _ANSI = re.compile(r"\033\[[0-9;]*m")
@@ -251,6 +251,47 @@ def fmt_uptime(seconds: int) -> str:
     if m:
         return f"{m}m {s}s"
     return f"{s}s"
+
+
+def fmt_hs(v) -> str:
+    try:
+        if v is None:
+            return "—"
+        return f"{float(v):,.0f} H/s"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def fmt_hugepages(val) -> str:
+    """XMRig v1 API uses a bool; /2/summary uses [allocated, total]."""
+    if val is True:
+        return "yes"
+    if val is False:
+        return "no"
+    if isinstance(val, (list, tuple)):
+        if len(val) >= 2:
+            try:
+                a, t = int(val[0]), int(val[1])
+            except (TypeError, ValueError):
+                return "—"
+            if t > 0:
+                return f"{a}/{t} ({100.0 * a / t:.0f}%)"
+            return f"{a}/{t}"
+        if len(val) == 1:
+            return fmt_hugepages(val[0])
+        return "—"
+    if val is None:
+        return "—"
+    return str(val)
+
+
+def fmt_ping(val) -> str:
+    if val is None or val == "":
+        return "—"
+    try:
+        return f"{int(val)} ms"
+    except (TypeError, ValueError):
+        return str(val)
 
 
 def read_tail(path: str, n: int = 40) -> list[str]:
@@ -500,10 +541,8 @@ class App:
             lines = self.tab_config(live)
         elif tab == "Usage":
             lines = self.tab_usage(live)
-        elif tab == "Logs":
-            lines = self.tab_logs()
         else:
-            lines = self.tab_stats(live)
+            lines = self.tab_logs()
         footer = f"  {DIM}← → tabs · s start · t stop · Esc to cancel{RESET}"
         room = max(3, rows - 4)
         vis = lines[:room]
@@ -570,6 +609,7 @@ class App:
     def tab_usage(self, live: dict) -> list[str]:
         job = live["job"]
         state = live["state"]
+        api = live.get("api") or {}
         hs = live["hs"] or 0.0
         peak = live["highest"] or PEAK_HS
         pct = (float(hs) / peak * 100.0) if peak and state == "RUNNING" and hs else 0.0
@@ -579,6 +619,15 @@ class App:
         bw = max(20, min(48, self.cols - 22))
         hs_s = f"{hs:,.0f} H/s" if hs else ("warming up…" if state != "STOPPED" else "—")
         brand, ram = cpu_info()
+        conn = api.get("connection") or {}
+        tot = (api.get("hashrate") or {}).get("total") or []
+        cpu = (api.get("cpu") or {}).get("brand") or brand
+        if state == "RUNNING":
+            badge = f"{GREEN}RUNNING{RESET}"
+        elif state == "STARTING":
+            badge = f"{ORANGE}STARTING{RESET}"
+        else:
+            badge = f"{RED}STOPPED{RESET}"
 
         if state == "STOPPED":
             insight = "Miner is off. Hashrate is 0 until you type s."
@@ -593,47 +642,50 @@ class App:
             insight = f"{pct:.0f}% of peak · still warming or cores are busy."
             insight_note = "Longer dataset init is more expensive even when cached. Wait, then /usage."
 
-        contrib = []
-        if state == "RUNNING" and hs:
-            contrib = [
-                self.kv("CPU threads", f"100% of hashrate · {job.get('threads','-')} threads", 22),
-                self.kv("Mode", f"{job.get('mode','-')}  (2 GB dataset)", 22),
-                self.kv("Pool", job.get("pool_host") or "—", 22),
-            ]
-        else:
-            contrib = [
-                self.kv("CPU threads", "0% · miner is not hashing", 22),
-                self.kv("Mode", f"{job.get('mode','-')}  (idle)", 22),
-                self.kv("Pool", job.get("pool_host") or "—", 22),
-            ]
+        def win(i: int) -> str:
+            return fmt_hs(tot[i] if i < len(tot) else None)
+
+        ping = conn.get("ping")
+        failures = conn.get("failures")
+        pool = conn.get("pool") or job.get("pool_host") or job.get("pool") or "—"
+        worker = api.get("worker_id") or job.get("worker") or "—"
+        fail_s = str(failures) if failures is not None and failures != "" else "—"
+        windows = (
+            f"  {DIM}10s{RESET} {win(0)}   "
+            f"{DIM}60s{RESET} {win(1)}   "
+            f"{DIM}15m{RESET} {win(2)}   "
+            f"{DIM}high{RESET} {peak:,.0f} H/s"
+        )
 
         return [
             "",
             f"  {BOLD}Session{RESET}",
-            self.kv("Status", state),
+            self.kv("Status", badge),
             self.kv("Speed", hs_s),
             self.kv("Shares", f"{acc} accepted  /  {rej} rejected"),
             self.kv("Uptime", fmt_uptime(live["up"]) if live["up"] else "—"),
-            self.kv("UI duration (wall)", fmt_uptime(int(time.time() - self.started))),
-            self.kv("Algo", live["algo"]),
             "",
-            f"  {BOLD}Current session{RESET}",
+            f"  {BOLD}Hashrate{RESET}",
             f"  {bar(pct, bw)}  {pct:.0f}% of peak",
+            windows,
             f"  {DIM}Peak {peak:,.0f} H/s from offline sweep · {job.get('threads','-')} threads · {job.get('mode','-')}{RESET}",
             "",
             f"  {BOLD}Share quality{RESET}",
             f"  {bar(share_pct, bw, GREEN if share_pct >= 95 or total_sh == 0 else ORANGE)}  {share_pct:.0f}% accepted",
             f"  {DIM}{acc} good · {rej} rejected{RESET}",
             "",
-            f"  {BOLD}What's contributing to your hashrate?{RESET}",
-            f"  {DIM}Approximate, based on this machine — does not include other devices{RESET}",
+            f"  {BOLD}Connection{RESET}",
+            self.kv("pool", str(pool)),
+            self.kv("ping / failures", f"{fmt_ping(ping)}  /  {fail_s}"),
+            self.kv("worker", str(worker)),
+            "",
+            f"  {BOLD}Machine{RESET}",
+            self.kv("cpu", trunc(f"{cpu} · {ram}", max(18, self.cols - 28))),
+            self.kv("hugepages", fmt_hugepages(live.get("hugepages"))),
+            self.kv("version", str(api.get("version") or "—")),
             "",
             f"  {insight}",
             f"  {DIM}{insight_note}{RESET}",
-            "",
-            *contrib,
-            "",
-            f"  {DIM}{trunc(brand, self.cols - 4)} · {ram}{RESET}",
         ]
 
     def tab_logs(self) -> list[str]:
@@ -643,37 +695,6 @@ class App:
         for ln in read_tail(path, 40):
             lines.append("  " + ln)
         return lines
-
-    def tab_stats(self, live: dict) -> list[str]:
-        api = live["api"] or {}
-        hs = api.get("hashrate") or {}
-        tot = hs.get("total") or [None, None, None]
-        def f(i):
-            try:
-                v = tot[i]
-                return f"{v:,.0f} H/s" if v is not None else "—"
-            except Exception:
-                return "—"
-        cpu = (api.get("cpu") or {}).get("brand") or cpu_info()[0]
-        return [
-            "",
-            f"  {BOLD}Hashrate{RESET}",
-            self.kv("10s", f(0)),
-            self.kv("60s", f(1) if len(tot) > 1 else "—"),
-            self.kv("15m", f(2) if len(tot) > 2 else "—"),
-            self.kv("highest", f"{live['highest']:,.0f} H/s"),
-            "",
-            f"  {BOLD}Connection{RESET}",
-            self.kv("pool", (api.get("connection") or {}).get("pool") or live["job"].get("pool") or "—"),
-            self.kv("ping", str((api.get("connection") or {}).get("ping") or "—")),
-            self.kv("failures", str((api.get("connection") or {}).get("failures") or "—")),
-            "",
-            f"  {BOLD}Machine{RESET}",
-            self.kv("cpu", trunc(str(cpu), max(18, self.cols - 28))),
-            self.kv("hugepages", {True: "yes", False: "no"}.get(live["hugepages"], "—")),
-            self.kv("version", str(api.get("version") or "—")),
-            self.kv("worker", str(api.get("worker_id") or live["job"].get("worker") or "—")),
-        ]
 
     def draw_confirm(self) -> None:
         if not self.dump:
@@ -688,13 +709,23 @@ class App:
 
     def draw(self) -> None:
         self.size()
-        live = self.live()
-        if self.mode == "overlay":
-            self.draw_overlay(live)
-        elif self.mode == "confirm":
-            self.draw_confirm()
-        else:
-            self.draw_home(live)
+        try:
+            live = self.live()
+            if self.mode == "overlay":
+                self.draw_overlay(live)
+            elif self.mode == "confirm":
+                self.draw_confirm()
+            else:
+                self.draw_home(live)
+        except Exception as e:
+            if self.dump:
+                raise
+            try:
+                self.write(CLEAR + HIDE)
+                self.write(f"  {RED}UI error{RESET}  {e}\n")
+                self.write(f"  {DIM}redraws every second · miner is not stopped by this.{RESET}")
+            except Exception:
+                pass
         sys.stdout.flush()
         self.last_draw = time.time()
 
@@ -929,8 +960,10 @@ class App:
         if key == "e" and TABS[self.tab] == "Logs":
             self.log_which = "log" if self.log_which == "err" else "err"
             return True
-        if key in "12345":
-            self.tab = int(key) - 1
+        if key in "1234":
+            i = int(key) - 1
+            if i < len(TABS):
+                self.tab = i
             return True
         return True
 
@@ -1001,6 +1034,35 @@ def self_test() -> int:
     check("unknown empty", ms == [])
     check("alias /stats", resolve_action("/stats", None) == "usage")
     check("alias /plist", resolve_action("/plist", None) == "config")
+    check("no Stats tab", "Stats" not in TABS and "Usage" in TABS)
+    check("hugepages list", fmt_hugepages([2080, 2080]) == "2080/2080 (100%)")
+    check("hugepages bool", fmt_hugepages(True) == "yes" and fmt_hugepages(False) == "no")
+    check("hugepages none", fmt_hugepages(None) == "—")
+    usage_app = App(dump=True, cols=100, rows=36)
+    usage_app.cols, usage_app.rows = 100, 36
+    usage_live = {
+        "state": "RUNNING",
+        "job": parse_job(),
+        "api": {
+            "hashrate": {"total": [3800.2, 3700.1, None], "highest": 4100},
+            "connection": {"pool": "pool.example:3333", "ping": 12, "failures": 0},
+            "cpu": {"brand": "Apple M4"},
+            "version": "6.22.0",
+            "worker_id": "m4",
+        },
+        "hs": 3800.2,
+        "highest": PEAK_HS,
+        "acc": 3,
+        "rej": 0,
+        "up": 90,
+        "algo": "rx/0",
+        "hugepages": [2080, 2080],
+        "extra": [],
+    }
+    usage_txt = _ANSI.sub("", "\n".join(usage_app.tab_usage(usage_live)))
+    check("usage has hashrate windows", "10s" in usage_txt and "60s" in usage_txt and "15m" in usage_txt)
+    check("usage hugepages list ok", "2080/2080" in usage_txt)
+    check("usage has ping", "12 ms" in usage_txt)
     job = parse_job()
     check("plist threads", job.get("threads") not in ("", None))
     check("plist pool", "monero" in str(job.get("pool") or "").lower() or job.get("pool") != "-")

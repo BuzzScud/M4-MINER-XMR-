@@ -49,7 +49,7 @@ s            start (immediate)
 t            stop
 q            quit UI
 /            command palette (filter as you type)
-/usage       dashboard: speed, shares, bars, tabs
+/usage       dashboard: speed, shares, hashrate windows, pool, machine
 /status      status tab
 /config      threads, mode, pool, worker
 /logs        log tab
