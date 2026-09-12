@@ -24,6 +24,7 @@
         <string>--donate-level=0</string>
         <string>--print-time=30</string>
         <string>--no-color</string>
+        <string>--log-file=/PATH/TO/XMR MINER/logs/xmrig.log</string>
     </array>
     <key>WorkingDirectory</key><string>/PATH/TO/XMR MINER</string>
     <key>RunAtLoad</key><false/>

@@ -4,8 +4,8 @@ on run
 		activate
 		set t to do script "clear; exec " & quoted form of ui
 		try
-			set number of columns of front window to 110
-			set number of rows of front window to 36
+			set number of columns of front window to 147
+			set number of rows of front window to 58
 		end try
 	end tell
 end run

@@ -42,23 +42,39 @@ Logs: `logs/xmrig.log` and `logs/xmrig.err.log`
 
 Click **XMR Miner** in the dock (or the `.app` in this folder). It opens Terminal with the miner UI. It does **not** start mining.
 
-Prompt is Claude-style. Type `/` and matching commands appear above the prompt as you type. Mining starts only on `s`.
+The UI is "Rail" (design 2 of `~/Desktop/XMR Miner — TUI Designs v2.html`, built on the Ledger): the left pane is the
+Ledger — job card, then a scrollback of `•` bullets with `└` results (start, dataset ready, pool connected, a share ledger
+with #, time, diff, latency, ✓/✗, stop, Desktop summary path); `/usage`, `/config`, `/logs` print as cards (`←/→` cycles,
+`esc` returns). At 100 columns or more a quiet rail on the right always shows hashrate with a sparkline of the UI's own
+1-second samples and the 10s/60s/15m windows, shares with per-minute bars and a next-share estimate, per-thread load from
+`/2/backends`, pool, dataset, machine and session. Below 100 columns the rail folds away and the card carries a live `now:`
+row instead; at 24 rows or fewer the card collapses to 3 rows. The only motion is the shimmer on "Mining". Mining starts
+only on `s`. Colors are the "Material" palette (9 of `~/Desktop/XMR Miner — Rail Palettes.html`): Google blue for
+actions, a lighter blue for data, Google green/red/yellow only for state, on a #202124 ground — the UI asks Terminal for
+that ground with OSC 11 on start and restores your profile on exit. The dock launcher opens 147×58.
+
+The job file passes `--log-file=logs/xmrig.log`, so xmrig writes its own log: the ledger takes share latency, dataset time and
+allocation from it, and `/logs` shows it. Before the first restart with that flag the ledger counts shares from the API instead
+and marks the latency column `~` (it is the pool ping at that moment).
 
 ```
 s            start (immediate)
 t            stop (writes a summary txt to Desktop)
-q            quit UI
-/            command palette (filter as you type)
-/usage       dashboard: status, speed, shares, pool, machine
-/config      threads, mode, pool, worker
-/logs        log tab
-/err         error log tab
+q / ⌃C       quit UI (does not stop a running miner)
+/            command palette (filter as you type, ↑↓ pick, tab complete, ↵ run)
+/usage       card: hashrate, windows, shares, cadence, threads, dataset, pool, machine, uptime
+/config      card: threads, mode, pool, worker, flex, job file
+/logs        tail -n 20 of xmrig.log (e switches to the error log)
+/err         tail -n 20 of xmrig.err.log
 /open        this folder in Finder
-/bench       thread sweep (offline, never starts mining)
+/bench       thread sweep (offline, never starts mining; asks for "yes")
 /flex        pool algo switch (off = rx/0). does not start mining.
 /help        command list
-esc          close palette / dashboard
+esc          close palette / card
 ```
+
+Checks that touch no miner: `python3 bin/miner-ui.py --self-test` and
+`python3 bin/miner-ui.py --dump home|home-stopped|home-starting|slash|usage|config|logs|confirm [cols rows] [--plain]`.
 
 If the dock icon is a question mark, drag `XMR Miner.app` from this folder onto the dock.
 
