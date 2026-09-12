@@ -4,6 +4,22 @@ This folder **is** the install. XMRig `rx/0` (RandomX), Apple Silicon, click-to-
 
 Home: `/Users/christiantavarez/Desktop/PROJECTS/XMR MINER`
 
+## Folder layout
+
+```
+bin/                 xmrig (arm64, stock 6.26.0), miner-ui.py (the Terminal UI), minerctl.sh (start/stop/status),
+                     write-session-summary.py, xmr_bench_sweep.sh, the dock launcher's AppleScript and icon
+XMR Miner.app/       dock launcher: opens Terminal at 147×58 with the UI; never starts mining by itself
+logs/                xmrig.log / xmrig.err.log (from --log-file), last-session.json, the pid file   (local only)
+docs/setup/          Setup Instructions (html)
+docs/randomx/        how RandomX is made, the mining audit, the M4 tune plan, Two Proofs of Work
+docs/designs/        the interactive TUI mockup pages the screen was chosen from
+lab/                 the RandomX ↔ crystalline validation lab (see lab/README.md); lab/RandomX is a pinned submodule
+install.sh           writes the job file (plist) from wallet.local, rebuilds the dock app; starts nothing
+wallet.local(.example), com.minerv3.xmrig.plist(.example)   payout address + job file (the real ones are gitignored)
+vendor/              local xmrig source checkout (gitignored); XMR-Miner-Portable.zip, bin/xmrig.* extras (gitignored)
+```
+
 ## Wallet (keep private files local)
 
 Git does **not** carry the payout address or any keys.
@@ -14,7 +30,7 @@ Git does **not** carry the payout address or any keys.
 
 `wallet.local` and `com.minerv3.xmrig.plist` are gitignored. `./install.sh` reads `wallet.local` and writes the plist.
 
-RandomX lab page: `RandomX-formula-lab.html`
+RandomX lab page: `lab/RandomX-formula-lab.html` (the real one; the original sketch is `lab/RandomX-formula-lab.original.html`)
 
 ## Ready (this M4)
 
