@@ -49,8 +49,7 @@ class Cmd:
 
 
 COMMANDS = (
-    Cmd("/usage", "Show speed, shares, hashrate windows, pool, and machine", "usage"),
-    Cmd("/status", "Show miner status, pool, and live hashrate", "status"),
+    Cmd("/usage", "Show status, speed, shares, pool, and machine", "usage"),
     Cmd("/config", "Show threads, mode, pool, and worker from the job file", "config"),
     Cmd("/logs", "Tail the last 40 lines of xmrig.log", "logs"),
     Cmd("/err", "Tail the last 40 lines of the error log", "err"),
@@ -63,10 +62,12 @@ COMMANDS = (
 
 ALIASES = {
     "/stats": "usage",
+    "/status": "usage",
     "/plist": "config",
     "/error": "err",
-    "/refresh": "status",
+    "/refresh": "usage",
     "usage": "usage",
+    "status": "usage",
     "logs": "logs",
     "err": "err",
     "plist": "config",
@@ -74,7 +75,7 @@ ALIASES = {
     "?": "help",
 }
 
-TABS = ("Status", "Config", "Usage", "Logs")
+TABS = ("Usage", "Config", "Logs")
 
 
 _ANSI = re.compile(r"\033\[[0-9;]*m")
@@ -316,7 +317,7 @@ class App:
     buf: str = ""
     sel: int = 0
     mode: str = "home"  # home | overlay | confirm
-    tab: int = 2  # Usage
+    tab: int = 0  # Usage
     log_which: str = "log"
     body: list[str] = field(default_factory=list)
     confirm_buf: str = ""
@@ -535,12 +536,10 @@ class App:
                 parts.append(f"{DIM}{name}{RESET}")
         self.write("  " + "   ".join(parts) + "\n")
         self.write(f"{BLUE}{'─' * cols}{RESET}\n")
-        if tab == "Status":
-            lines = self.tab_status(live)
+        if tab == "Usage":
+            lines = self.tab_usage(live)
         elif tab == "Config":
             lines = self.tab_config(live)
-        elif tab == "Usage":
-            lines = self.tab_usage(live)
         else:
             lines = self.tab_logs()
         footer = f"  {DIM}← → tabs · s start · t stop · Esc to cancel{RESET}"
@@ -555,36 +554,6 @@ class App:
             self.write(HIDE)
         else:
             self.write("\n")
-
-    def tab_status(self, live: dict) -> list[str]:
-        job = live["job"]
-        state = live["state"]
-        if state == "RUNNING":
-            badge = f"{GREEN}RUNNING{RESET}"
-        elif state == "STARTING":
-            badge = f"{ORANGE}STARTING{RESET}"
-        else:
-            badge = f"{RED}STOPPED{RESET}"
-        hs = live["hs"]
-        hs_s = f"{hs:,.0f} H/s" if hs else ("warming up…" if state != "STOPPED" else "—")
-        lines = [
-            "",
-            f"  {BOLD}Session{RESET}",
-            self.kv("Status", badge),
-            self.kv("Speed", hs_s),
-            self.kv("Highest", f"{live['highest']:,.0f} H/s"),
-            self.kv("Shares", f"{live['acc']} accepted  /  {live['rej']} rejected"),
-            self.kv("Uptime", fmt_uptime(live["up"]) if live["up"] else "—"),
-            self.kv("Algo", live["algo"]),
-            self.kv("Pool", job.get("pool_host") or job.get("pool") or "—"),
-            self.kv("Worker", job.get("worker") or "—"),
-            self.kv("UI open", fmt_uptime(int(time.time() - self.started))),
-        ]
-        if live["extra"] and state == "RUNNING":
-            lines.append("")
-            for e in live["extra"]:
-                lines.append(f"  {e}")
-        return lines
 
     def tab_config(self, live: dict) -> list[str]:
         j = live["job"]
@@ -664,6 +633,7 @@ class App:
             self.kv("Speed", hs_s),
             self.kv("Shares", f"{acc} accepted  /  {rej} rejected"),
             self.kv("Uptime", fmt_uptime(live["up"]) if live["up"] else "—"),
+            self.kv("Algo", live["algo"]),
             "",
             f"  {BOLD}Hashrate{RESET}",
             f"  {bar(pct, bw)}  {pct:.0f}% of peak",
@@ -804,8 +774,6 @@ class App:
             return False
         if action == "usage":
             self.open_overlay("Usage")
-        elif action == "status":
-            self.open_overlay("Status")
         elif action == "config":
             self.open_overlay("Config")
         elif action == "logs":
@@ -960,7 +928,7 @@ class App:
         if key == "e" and TABS[self.tab] == "Logs":
             self.log_which = "log" if self.log_which == "err" else "err"
             return True
-        if key in "1234":
+        if key in "123":
             i = int(key) - 1
             if i < len(TABS):
                 self.tab = i
@@ -1033,8 +1001,10 @@ def self_test() -> int:
     ms = filter_cmds("/xyznope")
     check("unknown empty", ms == [])
     check("alias /stats", resolve_action("/stats", None) == "usage")
+    check("alias /status", resolve_action("/status", None) == "usage")
+    check("no /status command", all(c.name != "/status" for c in COMMANDS))
     check("alias /plist", resolve_action("/plist", None) == "config")
-    check("no Stats tab", "Stats" not in TABS and "Usage" in TABS)
+    check("tabs are Usage Config Logs", TABS == ("Usage", "Config", "Logs"))
     check("hugepages list", fmt_hugepages([2080, 2080]) == "2080/2080 (100%)")
     check("hugepages bool", fmt_hugepages(True) == "yes" and fmt_hugepages(False) == "no")
     check("hugepages none", fmt_hugepages(None) == "—")
