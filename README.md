@@ -46,7 +46,7 @@ Prompt is Claude-style. Type `/` and matching commands appear above the prompt a
 
 ```
 s            start (immediate)
-t            stop
+t            stop (writes a summary txt to Desktop)
 q            quit UI
 /            command palette (filter as you type)
 /usage       dashboard: status, speed, shares, pool, machine

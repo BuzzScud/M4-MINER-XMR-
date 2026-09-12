@@ -9,6 +9,8 @@ com.minerv3.xmrig.plist
 flex.on
 logs/*.log
 logs/*.pid
+logs/last-session.json
+logs/last-session.json.tmp
 
 # xmrig source checkout lives locally; GitHub ships bin/xmrig
 vendor/

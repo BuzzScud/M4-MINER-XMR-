@@ -25,6 +25,7 @@ ERR = os.path.join(ROOT, "logs", "xmrig.err.log")
 PLIST = os.path.join(ROOT, "com.minerv3.xmrig.plist")
 API = "http://127.0.0.1:18088/2/summary"
 PEAK_HS = 4204.0
+SNAP = os.path.join(ROOT, "logs", "last-session.json")
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -202,6 +203,46 @@ def ctl_status() -> tuple[str, list[str]]:
     if not lines:
         return "STOPPED", []
     return lines[0].strip(), lines[1:]
+
+
+def session_snapshot(live: dict) -> dict:
+    api = live.get("api") or {}
+    job = live.get("job") or {}
+    hs = api.get("hashrate") or {}
+    tot = hs.get("total") or []
+    conn = api.get("connection") or {}
+    return {
+        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "state": live.get("state"),
+        "hs": live.get("hs"),
+        "hs10": tot[0] if len(tot) > 0 else live.get("hs"),
+        "hs60": tot[1] if len(tot) > 1 else None,
+        "hs15": tot[2] if len(tot) > 2 else None,
+        "highest": live.get("highest"),
+        "acc": live.get("acc") or 0,
+        "rej": live.get("rej") or 0,
+        "up": live.get("up") or 0,
+        "algo": live.get("algo") or job.get("algo"),
+        "pool": conn.get("pool") or job.get("pool") or job.get("pool_host"),
+        "worker": job.get("worker") or api.get("worker_id"),
+        "ping": conn.get("ping"),
+        "failures": conn.get("failures"),
+        "version": api.get("version"),
+        "threads": job.get("threads"),
+        "mode": job.get("mode"),
+        "hugepages": live.get("hugepages"),
+    }
+
+
+def save_session_snapshot(live: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(SNAP), exist_ok=True)
+        tmp = SNAP + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(session_snapshot(live), f, indent=2)
+        os.replace(tmp, SNAP)
+    except Exception:
+        pass
 
 
 def xmrig_up() -> bool:
@@ -429,7 +470,7 @@ class App:
             up = int(api.get("uptime") or conn.get("uptime") or 0)
             algo = api.get("algo") or algo
             hugepages = api.get("hugepages")
-        return {
+        live = {
             "state": state,
             "extra": extra,
             "job": job,
@@ -442,6 +483,9 @@ class App:
             "algo": algo,
             "hugepages": hugepages,
         }
+        if not self.dump and state in ("RUNNING", "STARTING"):
+            save_session_snapshot(live)
+        return live
 
     def header_lines(self, live: dict) -> list[str]:
         # Gutter is 4 visible cols ("  ● "), so every text column starts at col 5.
@@ -787,7 +831,7 @@ class App:
 
     def do_stop(self) -> None:
         try:
-            out = subprocess.check_output([CTL, "stop"], text=True, timeout=8)
+            out = subprocess.check_output([CTL, "stop"], text=True, timeout=15)
         except Exception as e:
             out = str(e)
         self.set_body([ln for ln in out.splitlines() if ln] or ["Stopped."])
@@ -1098,6 +1142,8 @@ def self_test() -> int:
     check("usage has hashrate windows", "10s" in usage_txt and "60s" in usage_txt and "15m" in usage_txt)
     check("usage hugepages list ok", "2080/2080" in usage_txt)
     check("usage has ping", "12 ms" in usage_txt)
+    snap = session_snapshot(usage_live)
+    check("session snapshot", snap["acc"] == 3 and snap["hs10"] == 3800.2 and snap["pool"] == "pool.example:3333")
     job = parse_job()
     check("plist threads", job.get("threads") not in ("", None))
     check("plist pool", "monero" in str(job.get("pool") or "").lower() or job.get("pool") != "-")

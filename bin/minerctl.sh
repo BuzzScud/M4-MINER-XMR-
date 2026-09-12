@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Control helper. Starts xmrig from this process (not launchd).
 # launchd cannot run binaries under Desktop (TCC hang: 0% CPU, empty logs).
-# Subcommands: status | start | stop
+# Subcommands: status | start | stop | kill
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -74,8 +74,15 @@ print(f"Pool: {pool}")
     echo "Started. It takes about a minute to reach full speed."
     ;;
 
-  stop)
+  stop|kill)
     if ! is_up; then echo "Not running."; exit 0; fi
+    reason="${1:-stop}"
+    J=$(curl -s --max-time 2 "$API" 2>/dev/null || true)
+    if [[ -n $J ]]; then
+      print -r -- "$J" | python3 "$ROOT/bin/write-session-summary.py" --reason "$reason" --api-stdin || true
+    else
+      python3 "$ROOT/bin/write-session-summary.py" --reason "$reason" || true
+    fi
     if [[ -f $PIDFILE ]]; then
       kill "$(cat "$PIDFILE")" 2>/dev/null || true
     fi
