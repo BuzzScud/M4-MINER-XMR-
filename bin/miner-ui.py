@@ -193,7 +193,7 @@ def parse_job(path: str = PLIST) -> dict:
         else:
             i += 1
     user = d.get("-u", "")
-    worker = user.rsplit(".", 1)[-1] if "." in user else user
+    worker = user.rsplit(".", 1)[-1] if "." in user else ""  # a bare -u is the wallet, never a worker name
     pool = d.get("-o", "-")
     # the command as minerctl runs it, reduced to what decides the hash: algo, threads, mode
     show = ["xmrig"]
@@ -1110,7 +1110,7 @@ class App:
                 tls = conn.get("tls")
                 tls_s = tls if isinstance(tls, str) and tls else ("TLS" if tls else "plain")
                 bullet(f"{BOLD}Connected{NOBOLD} to {pool}")
-                tree(f"{SEC}{tls_s} · {fmt_ping(conn.get('ping'))} · worker {api.get('worker_id') or live['job'].get('worker') or '—'}{INK}")
+                tree(f"{SEC}{tls_s} · {fmt_ping(conn.get('ping'))} · worker {live['job'].get('worker') or api.get('worker_id') or '—'}{INK}")
             elif k == "warn":
                 bullet(f"{WARN}{e['title']}{INK}", WARN)
                 tree(f"{SEC}{e.get('sub','')}{INK}")
@@ -1777,7 +1777,7 @@ def _demo_live(state: str = "RUNNING") -> dict:
         "results": {"diff_current": 125113, "shares_good": 1945, "shares_total": 1945, "avg_time": 30},
         "cpu": {"brand": "Apple M4"},
         "version": "6.26.0",
-        "worker_id": "minerv3-m4-16gb",
+        "worker_id": "demo-mac.local",  # xmrig reports the host name here unless --api-worker-id is set
         "uptime": 58080,
         "hugepages": [0, 1178],
     }
@@ -1880,6 +1880,11 @@ def self_test() -> int:
     job = parse_job()
     check("plist threads", job.get("threads") not in ("", None))
     check("plist cmdline hides wallet", "caffeinate -i xmrig" in job.get("cmdline", "") and "-u" not in job.get("cmdline", ""))
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".plist") as tf:
+        plistlib.dump({"ProgramArguments": ["xmrig", "-u", "4" + "8" * 94]}, tf)
+        tf.flush()
+        check("bare -u wallet is never the worker", parse_job(tf.name)["worker"] == "-")
     snap = session_snapshot(_demo_live())
     check("session snapshot", snap["acc"] == 1945 and snap["hs10"] == 4178.4 and "moneroocean" in snap["pool"])
     lg = parse_log([
@@ -1920,6 +1925,7 @@ def self_test() -> int:
     check("starting rail", "│  warming up" in dump_frame("home-starting", 110, 36, strip=True) and "building" in dump_frame("home-starting", 110, 36, strip=True))
     check("user turn band", " › s" in home)
     check("bullets and trees", "• Started xmrig" in home and "└ caffeinate -i xmrig" in home)
+    check("pool line names the pool worker, not the host", "· worker " in home and "demo-mac.local" not in home)
     check("shares ledger", "• Shares  1,945 accepted" in home and "#1,945" in home and "diff 125,113" in home and "143 ms" in home and "✓" in home)
     check("status shimmer line", "Mining (16h 08m" in home and "t to stop)" in home)
     check("band placeholder", "› Type / for commands, t to stop" in home)
