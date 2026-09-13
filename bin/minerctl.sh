@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Control helper. Starts xmrig from this process (not launchd).
 # launchd cannot run binaries under Desktop (TCC hang: 0% CPU, empty logs).
-# Subcommands: status | start | stop | kill | nice
+# Subcommands: status | start | stop | kill | nice | job
+# The job file is rendered for THIS Mac at every start (bin/machine.sh).
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -11,6 +12,8 @@ LOGS="$ROOT/logs"
 PIDFILE="$LOGS/xmrig.pid"
 API="http://127.0.0.1:18088/2/summary"
 HTTP_PORT=18088
+
+source "$ROOT/bin/machine.sh"
 
 mkdir -p "$LOGS"
 
@@ -143,6 +146,12 @@ print(f"Pool: {pool}")
     apply_nice
     ;;
 
+  job)
+    # Render the job file for this Mac (only rewritten when it differs) and show the profile.
+    write_job_file "$ROOT" --if-changed || exit 1
+    machine_print
+    ;;
+
   start)
     if is_up; then
       echo "Already running."
@@ -162,6 +171,14 @@ except Exception:
       fi
       apply_nice || true
       exit 0
+    fi
+    # Job file for this Mac: threads, mode, worker and paths from bin/machine.sh.
+    # Silent when nothing changed; a folder copied from another Mac corrects itself here.
+    write_job_file "$ROOT" --if-changed || exit 1
+    xattr -d com.apple.quarantine "$XMRIG" 2>/dev/null || true
+    if ! xmrig_has_arch "$XMRIG" "$(uname -m)"; then
+      echo "ERROR: bin/xmrig has no $(uname -m) slice (has: $(lipo -archs "$XMRIG" 2>/dev/null))."
+      exit 1
     fi
     mkdir -p "$LOGS"
     : >>"$LOGS/xmrig.log" >>"$LOGS/xmrig.err.log"

@@ -29,6 +29,7 @@ CTL = os.path.join(ROOT, "bin", "minerctl.sh")
 LOG = os.path.join(ROOT, "logs", "xmrig.log")
 ERR = os.path.join(ROOT, "logs", "xmrig.err.log")
 PLIST = os.path.join(ROOT, "com.minerv3.xmrig.plist")
+ARCH = os.uname().machine  # arm64 or x86_64; bin/xmrig is universal
 API = "http://127.0.0.1:18088/2/summary"
 API_BACKENDS = "http://127.0.0.1:18088/2/backends"
 PEAK_HS = 4204.0
@@ -1120,7 +1121,7 @@ class App:
         R.append("")
         R.append(lab("machine"))
         R.append(f"{(api.get('cpu') or {}).get('brand') or brand} · {ram}")
-        R.append(f"{SEC}XMRig {api.get('version') or (snap or {}).get('version') or '—'} arm64 · api :{job.get('http', '18088')}{INK}")
+        R.append(f"{SEC}XMRig {api.get('version') or (snap or {}).get('version') or '—'} {ARCH} · api :{job.get('http', '18088')}{INK}")
         if run or starting:
             ni = self.process_nice()
             if ni is not None:
@@ -1388,7 +1389,7 @@ class App:
             kv("Threads", thr_s),
             kv("Dataset", f"{ds}{SEC} · huge pages {hp}{INK}"),
             kv("Pool", f"{conn.get('pool') or job.get('pool') or '—'}{SEC} · {tls_label(conn, job)} · {fmt_ping(conn.get('ping')) if run else '—'} · {fail_s}{INK}"),
-            kv("Machine", f"{cpu} · {ram} · XMRig {api.get('version') or '—'} arm64"),
+            kv("Machine", f"{cpu} · {ram} · XMRig {api.get('version') or '—'} {ARCH}"),
             kv("Uptime", fmt_clock(live["up"]) if run or state == "STARTING" else "not running"),
         ]
         return rows

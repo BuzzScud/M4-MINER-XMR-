@@ -3,20 +3,26 @@
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
+source "$ROOT/bin/machine.sh"
+machine_detect "$ROOT"
 XMRIG="${XMRIG:-$ROOT/bin/xmrig}"
 PORT=18099
 WARMUP=70
 SAMPLES=6
-MODE="${RX_MODE:-fast}"
+MODE="${RX_MODE:-$MODE}"
 
 [[ -x "$XMRIG" ]] || { echo "xmrig not found at $XMRIG"; exit 1; }
 
 THREAD_LIST=("$@")
-[[ ${#THREAD_LIST[@]} -eq 0 ]] && THREAD_LIST=(4 5 6 7 8 9 10)
+if [[ ${#THREAD_LIST[@]} -eq 0 ]]; then
+  # the top 7 counts for this Mac (4..10 on the M4)
+  LO=$(( CORES - 6 )); (( LO < 1 )) && LO=1
+  THREAD_LIST=($(seq "$LO" "$CORES"))
+fi
 
 echo
-echo "RandomX thread sweep — mode=$MODE, $(sysctl -n machdep.cpu.brand_string)"
-echo "  $(sysctl -n hw.perflevel0.logicalcpu)P + $(sysctl -n hw.perflevel1.logicalcpu)E cores, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB RAM"
+echo "RandomX thread sweep — mode=$MODE, $CHIP"
+echo "  $CORES_LABEL, ${RAMGB} GB RAM"
 echo
 
 printf "  %-8s %-12s %s\n" "threads" "hashrate" "notes"
@@ -30,7 +36,7 @@ for T in "${THREAD_LIST[@]}"; do
            --randomx-mode="$MODE" \
            --threads="$T" \
            --cpu-priority=4 \
-           --randomx-init=8 \
+           --randomx-init="$CORES" \
            --http-host=127.0.0.1 --http-port="$PORT" \
            --no-color > "$LOG" 2>&1 &
   PID=$!

@@ -3,9 +3,10 @@
 **/__pycache__/
 *.pyc
 
-# payout + machine-local job file
-wallet.local
+# machine-local job file (rendered by bin/machine.sh) + tuning overrides
+# wallet.local is tracked on purpose: every Mac mines to the same public address
 com.minerv3.xmrig.plist
+machine.local
 flex.on
 logs/*.log
 logs/*.pid
