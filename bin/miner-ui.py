@@ -65,6 +65,11 @@ SHOW = "\033[?25h"
 HOME = "\033[H"
 SYNC_BEGIN = "\033[?2026h"
 SYNC_END = "\033[?2026l"
+ALT_ON = "\033[?1049h"
+ALT_OFF = "\033[?1049l"
+WRAP_OFF = "\033[?7l"
+WRAP_ON = "\033[?7h"
+CLEAR = "\033[H\033[2J"
 
 
 @dataclass(frozen=True)
@@ -222,9 +227,21 @@ def parse_job(path: str = PLIST) -> dict:
     return out
 
 
+def tls_label(conn: Optional[dict], job: Optional[dict] = None) -> str:
+    """API tls is empty while reconnecting; the job file still has --tls."""
+    tls = (conn or {}).get("tls")
+    if isinstance(tls, str) and tls.strip():
+        return tls.strip()
+    if tls:
+        return "TLS"
+    if (job or {}).get("tls"):
+        return "TLS"
+    return "plain"
+
+
 def api_get(url: str) -> Optional[dict]:
     try:
-        with urllib.request.urlopen(url, timeout=0.6) as r:
+        with urllib.request.urlopen(url, timeout=1.2) as r:
             return json.load(r)
     except Exception:
         return None
@@ -280,7 +297,7 @@ def session_snapshot(live: dict) -> dict:
         "up": live.get("up") or 0,
         "algo": live.get("algo") or job.get("algo"),
         "pool": conn.get("pool") or job.get("pool") or job.get("pool_host"),
-        "worker": job.get("worker") or api.get("worker_id"),
+        "worker": job.get("worker") if job.get("worker") not in ("", "-", None) else None,
         "ping": conn.get("ping"),
         "failures": conn.get("failures"),
         "version": api.get("version"),
@@ -342,9 +359,25 @@ def latest_summary_path() -> Optional[str]:
 
 
 def xmrig_up() -> bool:
+    """True if an xmrig process exists, or something is still listening on the API port.
+
+    A leftover miner can hold :18088 after pgrep misses it (renamed binary, race).
+    Starting a second copy then makes the UI attach to the old process's 17h API.
+    """
     try:
         r = subprocess.run(
             ["pgrep", "-x", "xmrig"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1,
+        )
+        if r.returncode == 0:
+            return True
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(
+            ["lsof", "-nP", "-iTCP:18088", "-sTCP:LISTEN"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=1,
@@ -559,15 +592,27 @@ _LOG_TS = re.compile(r"^\[(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d{3})\]\
 _SHARE = re.compile(r'^(accepted|rejected) \((\d+)/(\d+)\) diff (\d+)(?: "([^"]*)")? \((\d+) ms\)')
 _DSREADY = re.compile(r"dataset ready \((\d+) ms\)")
 _ALLOC = re.compile(r"allocated (\d+) MB \((\d+)\+(\d+)\) huge pages (\d+)% (\d+)/(\d+)")
+_ERR_QUOTED = re.compile(r'(connect error|DNS error|read error|write error):\s+"([^"]+)"', re.I)
 
 
 def parse_log(lines: list[str]) -> dict:
     """What the ledger wants from xmrig's own log (--log-file): shares with real latency,
-    dataset timing and allocation, the pool line, the latest speed line."""
-    out: dict = {"shares": [], "dataset_ms": None, "dataset_ts": None, "alloc": None, "pool": None, "speed": None}
-    for ln in lines:
+    dataset timing and allocation, the pool line, the latest speed line, connect errors."""
+    out: dict = {
+        "shares": [],
+        "dataset_ms": None,
+        "dataset_ts": None,
+        "alloc": None,
+        "pool": None,
+        "speed": None,
+        "errors": [],
+    }
+    for raw in lines:
+        ln = _ANSI.sub("", raw or "")
         m = _LOG_TS.match(ln)
         if not m:
+            if "address already in use" in ln.lower():
+                out["errors"].append({"ts": 0.0, "kind": "bind", "msg": "HTTP API port already in use (another xmrig is running)"})
             continue
         y, mo, d, h, mi, s, ms3 = (int(x) for x in m.groups()[:7])
         try:
@@ -592,7 +637,30 @@ def parse_log(lines: list[str]) -> dict:
             out["pool"] = msg[9:].split()[0]
         elif msg.startswith("speed "):
             out["speed"] = msg
+        em = _ERR_QUOTED.search(msg)
+        if em:
+            kind = em.group(1).split()[0].lower()  # connect / DNS / read / write
+            out["errors"].append({"ts": ts, "kind": kind, "msg": em.group(2)})
+        elif "address already in use" in msg.lower():
+            out["errors"].append({"ts": ts, "kind": "bind", "msg": "HTTP API port already in use (another xmrig is running)"})
     return out
+
+
+def last_error_msg(logd: dict) -> str:
+    """Human line for the latest xmrig log error, or '' if the log has none."""
+    errs = logd.get("errors") or []
+    if not errs:
+        return ""
+    e = errs[-1]
+    kind = e.get("kind") or "error"
+    msg = e.get("msg") or ""
+    if kind == "connect":
+        return f'xmrig: connect error "{msg}"'
+    if kind == "dns":
+        return f'xmrig: DNS error "{msg}"'
+    if kind in ("read", "write"):
+        return f'xmrig: {kind} error "{msg}"'
+    return msg
 
 
 @dataclass
@@ -618,6 +686,7 @@ class App:
     lw: int = 80  # width of the left pane (== cols when the rail is folded)
     hist: list = field(default_factory=list)  # 10 s hashrate, one sample per poll
     thr_cache: Optional[tuple] = None
+    nice_cache: Optional[tuple] = None
     live_cache: Optional[tuple] = None
     cursor: Optional[tuple] = None
     started: float = field(default_factory=time.time)
@@ -628,15 +697,43 @@ class App:
     dump: bool = False
     force_palette: Optional[str] = None
     fixed_live: Optional[dict] = None
+    _resized: bool = False
+    last_resize: float = 0.0
+    _winch_r: Optional[int] = None
+    _clear_next: bool = False
 
     # ------------------------------------------------------------------ plumbing
-    def size(self) -> None:
+    def tty_size(self) -> tuple[int, int]:
+        """Kernel winsize for the output tty. Ignores $COLUMNS/$LINES so a drag is visible."""
+        fds: list[int] = []
+        if self.fd:
+            fds.append(self.fd)
         try:
-            s = shutil.get_terminal_size((80, 24))
-            self.cols = max(60, s.columns)
-            self.rows = max(18, s.lines)
+            if sys.stdout.isatty():
+                fds.append(sys.stdout.fileno())
         except Exception:
-            self.cols, self.rows = 80, 24
+            pass
+        for fd in fds:
+            try:
+                s = os.get_terminal_size(fd)
+                return max(1, int(s.columns)), max(1, int(s.lines))
+            except Exception:
+                continue
+        try:
+            s = shutil.get_terminal_size((self.cols or 80, self.rows or 24))
+            return max(1, int(s.columns)), max(1, int(s.lines))
+        except Exception:
+            return max(1, self.cols or 80), max(1, self.rows or 24)
+
+    def size(self) -> bool:
+        """Update cols/rows from the tty. True when the window actually changed."""
+        cols, rows = self.tty_size()
+        changed = (cols, rows) != (self.cols, self.rows)
+        if changed:
+            self.cols, self.rows = cols, rows
+            self.last_resize = time.time()
+            self._clear_next = True
+        return changed
 
     def matches(self) -> list[Cmd]:
         src = self.force_palette if self.force_palette is not None else self.buf
@@ -781,9 +878,11 @@ class App:
             "up": up,
             "algo": algo,
             "hugepages": hugepages,
-            "log": parse_log(read_tail(LOG, 200)) if state != "STOPPED" else {"shares": []},
+            "log": parse_log(read_tail(LOG, 400) + read_tail(ERR, 200)),
         }
-        if not self.dump and state in ("RUNNING", "STARTING"):
+        # STARTING has zeros; writing that over last-session.json made a later
+        # leftover look like a 0-share session. Only persist a live RUNNING sample.
+        if not self.dump and state == "RUNNING":
             save_session_snapshot(live)
         self.live_cache = (now, live)
         if state == "RUNNING":
@@ -802,6 +901,25 @@ class App:
         rates = api_thread_rates()
         self.thr_cache = (now, rates)
         return rates
+
+    def process_nice(self) -> Optional[int]:
+        """Current xmrig nice value, or None if it is not running. Cached ~3 s."""
+        if self.dump:
+            return None
+        now = time.time()
+        if self.nice_cache and now - self.nice_cache[0] < 3.0:
+            return self.nice_cache[1]
+        ni: Optional[int] = None
+        try:
+            raw = subprocess.check_output(["pgrep", "-x", "xmrig"], text=True, timeout=1)
+            pid = next((p for p in raw.split() if p.isdigit()), None)
+            if pid:
+                s = subprocess.check_output(["ps", "-o", "ni=", "-p", pid], text=True, timeout=1).strip()
+                ni = int(s)
+        except Exception:
+            ni = None
+        self.nice_cache = (now, ni)
+        return ni
 
     # ------------------------------------------------------------------ ledger model
     def add(self, kind: str, **kw) -> dict:
@@ -850,8 +968,22 @@ class App:
         conn = api.get("connection") or {}
         res = api.get("results") or {}
         prev = self.prev_state
+        if state == "STOPPED" and prev == "STARTING" and self.start_ts and (now - self.start_ts) < 60:
+            # just launched: API is down for a bit. Do not treat that as "exited
+            # outside this window" or the last-session snapshot (5m, 8 shares)
+            # gets pasted onto a start that is still coming up.
+            return
         if state == "RUNNING" and prev != "RUNNING":
-            if self.start_ts and prev == "STARTING":
+            up = int(live.get("up") or 0)
+            leftover = self.start_ts is not None and (now - self.start_ts) < 60 and up > 120
+            if leftover:
+                self.add(
+                    "warn",
+                    title="This is a leftover xmrig, not a new session",
+                    sub=f"already up {fmt_uptime(up)} · {fmt_n(live.get('acc'))} shares · press t to stop it",
+                )
+                self.start_ts = now - up
+            elif self.start_ts and prev == "STARTING":
                 self.ds_ready_s = max(0.0, now - self.start_ts)
             self.drop("dsprog")
             if not self.has("dataset"):
@@ -890,7 +1022,9 @@ class App:
                 fails = None
             if fails is not None:
                 if self.last_fail is not None and fails > self.last_fail:
-                    self.add("warn", title=f"Pool connection failed ({fails} so far this session)", sub="xmrig reconnects on its own; shares in flight may be lost")
+                    why = last_error_msg(live.get("log") or {})
+                    sub = why or "xmrig reconnects on its own; shares in flight may be lost — /logs for the reason"
+                    self.add("warn", title=f"Pool connection failed ({fails} so far this session)", sub=sub)
                 self.last_fail = fails
         else:
             self.last_acc = self.last_rej = None
@@ -972,7 +1106,7 @@ class App:
         host, _, port = str(pool).rpartition(":")
         R.append(host or pool)
         fails = conn.get("failures")
-        R.append(f"{SEC}:{port or '—'} · {'TLS' if (conn.get('tls') or job.get('tls')) else 'plain'} · {fmt_ping(conn.get('ping')) if run else '—'} · {fails if fails is not None else '—'} failure{'' if str(fails) == '1' else 's'}{INK}")
+        R.append(f"{SEC}:{port or '—'} · {tls_label(conn, job)} · {fmt_ping(conn.get('ping')) if run else '—'} · {fails if fails is not None else '—'} failure{'' if str(fails) == '1' else 's'}{INK}")
         # dataset
         R.append("")
         ds_state = "released" if state == "STOPPED" else ("2.0 GB" if run else "building")
@@ -987,6 +1121,11 @@ class App:
         R.append(lab("machine"))
         R.append(f"{(api.get('cpu') or {}).get('brand') or brand} · {ram}")
         R.append(f"{SEC}XMRig {api.get('version') or (snap or {}).get('version') or '—'} arm64 · api :{job.get('http', '18088')}{INK}")
+        if run or starting:
+            ni = self.process_nice()
+            if ni is not None:
+                extra = "" if ni <= -10 else " · wanted -10"
+                R.append(f"{SEC}nice {ni}{FAINT}{extra}{INK}")
         # session
         R.append("")
         R.append(lab("session"))
@@ -1088,6 +1227,8 @@ class App:
             if k == "start":
                 bullet(f"{BOLD}Started xmrig{NOBOLD}" if not e.get("text") else f"{BOLD}xmrig{NOBOLD}{SEC} · {e['text']}{INK}")
                 tree(f"{SEC}{e.get('cmd') or live['job'].get('cmdline') or 'caffeinate -i xmrig'}{INK}")
+                if e.get("nice"):
+                    tree(f"{SEC}{e['nice']}{INK}", first=False)
             elif k == "dsprog":
                 if state != "STARTING":
                     continue
@@ -1107,10 +1248,9 @@ class App:
                 tree(f"{SEC}{alloc} · huge pages {fmt_hugepages(live.get('hugepages') or (al and al['hp']))}{INK}")
             elif k == "pool":
                 pool = conn.get("pool") or live["job"].get("pool") or "—"
-                tls = conn.get("tls")
-                tls_s = tls if isinstance(tls, str) and tls else ("TLS" if tls else "plain")
+                tls_s = tls_label(conn, live["job"])
                 bullet(f"{BOLD}Connected{NOBOLD} to {pool}")
-                tree(f"{SEC}{tls_s} · {fmt_ping(conn.get('ping'))} · worker {live['job'].get('worker') or api.get('worker_id') or '—'}{INK}")
+                tree(f"{SEC}{tls_s} · {fmt_ping(conn.get('ping'))} · worker {live['job'].get('worker') or '—'}{INK}")
             elif k == "warn":
                 bullet(f"{WARN}{e['title']}{INK}", WARN)
                 tree(f"{SEC}{e.get('sub','')}{INK}")
@@ -1169,7 +1309,8 @@ class App:
             if not tail:
                 out.append(self.r(f"{SEC}  └ (no output){INK}"))
             for i, ln in enumerate(tail):
-                col = GOOD if "accepted" in ln else BAD if "rejected" in ln else INK
+                low = ln.lower()
+                col = GOOD if "accepted" in low else BAD if ("rejected" in low or "error" in low or "fail" in low) else INK
                 out.append(self.r(f"{SEC}{'  └ ' if i == 0 else '    '}{col}{ln}{INK}"))
             return out
         body = self.card_body(tab, live)
@@ -1209,6 +1350,7 @@ class App:
                 kv("Worker", job.get("worker") or "—"),
                 kv("HTTP API", f"127.0.0.1:{job.get('http', '18088')}"),
                 kv("Donate", f"{job.get('donate') or '0'}%"),
+                kv("Priority", "--cpu-priority=4 → nice -10 (needs root)"),
                 kv("Flex", "on · pool picks the algo" if flex else "off · rx/0 only"),
                 kv("Job file", os.path.basename(PLIST)),
                 kv("Folder", short_path(str(job.get("cwd") or ROOT), self.lw - 22)),
@@ -1245,7 +1387,7 @@ class App:
             "",
             kv("Threads", thr_s),
             kv("Dataset", f"{ds}{SEC} · huge pages {hp}{INK}"),
-            kv("Pool", f"{conn.get('pool') or job.get('pool') or '—'}{SEC} · {fmt_ping(conn.get('ping')) if run else '—'} · {fail_s}{INK}"),
+            kv("Pool", f"{conn.get('pool') or job.get('pool') or '—'}{SEC} · {tls_label(conn, job)} · {fmt_ping(conn.get('ping')) if run else '—'} · {fail_s}{INK}"),
             kv("Machine", f"{cpu} · {ram} · XMRig {api.get('version') or '—'} arm64"),
             kv("Uptime", fmt_clock(live["up"]) if run or state == "STARTING" else "not running"),
         ]
@@ -1361,8 +1503,8 @@ class App:
 
     # ------------------------------------------------------------------ frame
     def compose(self, live: dict) -> list[str]:
-        rows, cols = self.rows, self.cols
-        rail = self.rail_on()
+        rows, cols = max(1, self.rows), max(1, self.cols)
+        rail = self.rail_on() and cols >= self.RAIL_W + 20
         self.lw = cols - self.RAIL_W - 4 if rail else cols
         compact = rows <= 24
         head = self.header_rows(live, compact)
@@ -1414,11 +1556,14 @@ class App:
         self.lw = cols - self.RAIL_W - 4 if rail else cols
         return out
 
-    def draw(self, force: bool = True) -> None:
-        self.size()
+    def draw(self, force: bool = True, live: Optional[dict] = None) -> None:
+        if self.size() or self._resized:
+            force = True
+            self._resized = False
         self.frame_no += 1
         try:
-            live = self.live()
+            if live is None:
+                live = self.live()
             lines = self.compose(live)
         except Exception as e:
             if self.dump:
@@ -1435,10 +1580,14 @@ class App:
             sys.stdout.write("\n".join(lines) + "\n")
             sys.stdout.flush()
             return
-        body = HOME + "\r\n".join(lines)
+        wipe = CLEAR if self._clear_next else HOME
+        self._clear_next = False
+        body = wipe + "\r\n".join(lines)
         if self.cursor:
             y, x = self.cursor
             body += f"\033[{y + 1};{x + 1}H"
+        else:
+            body += "\033[J"  # leftover rows from a taller previous size
         if not force and body == self.last_frame:
             return
         self.last_frame = body
@@ -1459,22 +1608,47 @@ class App:
 
     def do_start(self) -> None:
         self.add("user", text="s")
+        live = self.live()
         try:
-            out = subprocess.check_output([CTL, "start"], text=True, timeout=8)
+            out = subprocess.check_output([CTL, "start"], text=True, timeout=12)
         except subprocess.CalledProcessError as e:
             out = e.output or "start failed"
         except Exception as e:
             out = str(e)
         lines = [ln for ln in out.splitlines() if ln.strip()]
+        nice = next((ln.strip() for ln in lines if ln.startswith("Nice:")), "")
+        cmd = self.live_cache[1]["job"].get("cmdline") if self.live_cache else ""
+        if live["state"] in ("RUNNING", "STARTING") and lines and lines[0].startswith("Already running"):
+            msg = f"Already mining ({fmt_uptime(live.get('up') or 0)}). t stops it."
+            self.say(msg, nice) if nice else self.say(msg)
+            self.nice_cache = None
+            self.mode = "home"
+            return
         if lines and lines[0].startswith("Started"):
             self.start_ts = time.time()
             self.ds_ready_s = None
             self.share_rows = []
             self.last_acc = self.last_rej = self.last_fail = None
+            self.nice_cache = None
             self.drop("dsprog", "shares", "dataset", "pool")
-            self.add("start", cmd=(self.live_cache[1]["job"].get("cmdline") if self.live_cache else ""))
+            self.add("start", cmd=cmd, nice=nice)
             self.add("dsprog")
             self.prev_state = "STARTING"
+        elif lines and lines[0].startswith("Already running"):
+            # leftover from a previous window (q does not stop xmrig). Attach; do not spawn.
+            api = api_summary()
+            up = int((api or {}).get("uptime") or 0)
+            self.start_ts = time.time() - up
+            self.ds_ready_s = None
+            self.last_acc = self.last_rej = self.last_fail = None
+            self.nice_cache = None
+            self.drop("dsprog")
+            self.add("start", text=f"already running ({fmt_uptime(up)})", cmd=cmd, nice=nice)
+            if api:
+                self.prev_state = "STOPPED"  # next poll: STOPPED → RUNNING fills dataset/pool
+            else:
+                self.add("dsprog")
+                self.prev_state = "STARTING"
         else:
             self.say(*(lines or ["start: no output"]))
         self.live_cache = None
@@ -1586,8 +1760,23 @@ class App:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_tty)
 
     def read_key(self) -> Optional[str]:
-        r, _, _ = select.select([self.fd], [], [], 0.4)
-        if not r:
+        fds = [self.fd]
+        if self._winch_r is not None:
+            fds.append(self._winch_r)
+        # ~30 Hz so a drag rearranges live; SIGWINCH also wakes via the pipe.
+        timeout = 0.03 if (time.time() - self.last_resize) < 0.5 else 0.08
+        try:
+            r, _, _ = select.select(fds, [], [], timeout)
+        except InterruptedError:
+            self._resized = True
+            return None
+        if self._winch_r is not None and self._winch_r in r:
+            try:
+                os.read(self._winch_r, 1024)
+            except (BlockingIOError, OSError):
+                pass
+            self._resized = True
+        if self.fd not in r:
             return None
         b = os.read(self.fd, 1)
         if not b:
@@ -1741,17 +1930,44 @@ class App:
 
     def loop(self) -> None:
         self.take_tty()
-        sys.stdout.write(f"\033]11;{GROUND}\007")  # ask the terminal for the Material ground (ignored if unsupported)
+        wr = None
+        old_wakeup = None
+        old_winch = None
         try:
+            rr, wr = os.pipe()
+            os.set_blocking(rr, False)
+            os.set_blocking(wr, False)
+            self._winch_r = rr
+            try:
+                old_wakeup = signal.set_wakeup_fd(wr)
+            except Exception:
+                old_wakeup = None
+
+            def _winch(_sig, _frm):
+                self._resized = True
+
+            old_winch = signal.signal(signal.SIGWINCH, _winch)
+        except Exception:
+            self._winch_r = None
+        # alt screen: Terminal.app will not reflow the previous frame while the
+        # window is dragged. wrap off: a one-cell mismatch cannot wrap a row.
+        sys.stdout.write(ALT_ON + HIDE + WRAP_OFF + f"\033]11;{GROUND}\007")
+        sys.stdout.flush()
+        try:
+            self._clear_next = True
             self.draw()
             while True:
                 key = self.read_key()
+                resized = self._resized or self.size()
                 if key is None:
-                    # live refresh in place; faster while the shimmer is on
-                    state = self.live_cache[1]["state"] if self.live_cache else "STOPPED"
-                    period = 0.4 if state != "STOPPED" else 1.0
-                    if time.time() - self.last_draw >= period:
-                        self.draw(force=False)
+                    if resized:
+                        cached = self.live_cache[1] if self.live_cache else None
+                        self.draw(force=True, live=cached)
+                    else:
+                        state = self.live_cache[1]["state"] if self.live_cache else "STOPPED"
+                        period = 0.4 if state != "STOPPED" else 1.0
+                        if time.time() - self.last_draw >= period:
+                            self.draw(force=False)
                     continue
                 if self.mode == "overlay":
                     ok = self.on_key_overlay(key)
@@ -1763,8 +1979,25 @@ class App:
                     break
                 self.draw()
         finally:
+            if old_winch is not None:
+                signal.signal(signal.SIGWINCH, old_winch)
+            try:
+                signal.set_wakeup_fd(old_wakeup if isinstance(old_wakeup, int) and old_wakeup >= 0 else -1)
+            except Exception:
+                pass
+            if self._winch_r is not None:
+                try:
+                    os.close(self._winch_r)
+                except Exception:
+                    pass
+                self._winch_r = None
+            if wr is not None:
+                try:
+                    os.close(wr)
+                except Exception:
+                    pass
             self.restore_tty()
-            sys.stdout.write(SHOW + RESET + "\033]111\007" + "\n")  # OSC 111: restore the profile's background
+            sys.stdout.write(SHOW + WRAP_ON + RESET + "\033]111\007" + ALT_OFF)
             sys.stdout.flush()
 
 
@@ -1781,9 +2014,10 @@ def _demo_live(state: str = "RUNNING") -> dict:
         "uptime": 58080,
         "hugepages": [0, 1178],
     }
+    empty_log = {"shares": [], "errors": []}
     if state == "STOPPED":
-        return {"state": "STOPPED", "job": job, "api": None, "hs": None, "highest": PEAK_HS, "acc": 0, "rej": 0, "up": 0, "algo": "rx/0", "hugepages": None}
-    return {"state": state, "job": job, "api": api, "hs": 4178.4 if state == "RUNNING" else None, "highest": PEAK_HS, "acc": 1945, "rej": 0, "up": 58080, "algo": "rx/0", "hugepages": [0, 1178]}
+        return {"state": "STOPPED", "job": job, "api": None, "hs": None, "highest": PEAK_HS, "acc": 0, "rej": 0, "up": 0, "algo": "rx/0", "hugepages": None, "log": empty_log}
+    return {"state": state, "job": job, "api": api, "hs": 4178.4 if state == "RUNNING" else None, "highest": PEAK_HS, "acc": 1945, "rej": 0, "up": 58080, "algo": "rx/0", "hugepages": [0, 1178], "log": empty_log}
 
 
 def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
@@ -1887,6 +2121,10 @@ def self_test() -> int:
         check("bare -u wallet is never the worker", parse_job(tf.name)["worker"] == "-")
     snap = session_snapshot(_demo_live())
     check("session snapshot", snap["acc"] == 1945 and snap["hs10"] == 4178.4 and "moneroocean" in snap["pool"])
+    check("snapshot worker is not the host", snap.get("worker") != "demo-mac.local")
+    check("tls_label version", tls_label({"tls": "TLSv1.3"}, {"tls": True}) == "TLSv1.3")
+    check("tls_label empty uses plist", tls_label({}, {"tls": True}) == "TLS" and tls_label({"tls": ""}, {"tls": True}) == "TLS")
+    check("tls_label plain", tls_label({}, {"tls": False}) == "plain")
     lg = parse_log([
         "[2026-09-12 12:43:20.101]  net      use pool gulf.moneroocean.stream:20016  TLSv1.3",
         "[2026-09-12 12:43:20.140]  randomx  allocated 2336 MB (2080+256) huge pages 0% 0/1178 +JIT (4 ms)",
@@ -1899,6 +2137,32 @@ def self_test() -> int:
     check("parse_log shares", len(lg["shares"]) == 2 and lg["shares"][0]["ms"] == 143 and lg["shares"][0]["ok"] and not lg["shares"][1]["ok"] and lg["shares"][1]["why"] == "Low difficulty share")
     check("parse_log dataset/alloc/pool", lg["dataset_ms"] == 6620 and lg["alloc"]["mb"] == 2336 and lg["alloc"]["hp"] == [0, 1178] and lg["pool"] == "gulf.moneroocean.stream:20016" and lg["speed"].startswith("speed"))
     check("parse_log timestamp", time.strftime("%H:%M:%S", time.localtime(lg["shares"][0]["ts"])) == "12:43:58")
+    lg_err = parse_log([
+        '[2026-09-13 12:20:01.001]  net      [gulf.moneroocean.stream:20016] 1.2.3.4 connect error: "connection timed out"',
+        '[2026-09-13 12:20:08.010]  net      DNS error: "temporary failure in name resolution"',
+        '[2026-09-13 12:20:09.000]  http     HTTP API 127.0.0.1:18088 bind failed "address already in use"',
+    ])
+    check("parse_log connect error", lg_err["errors"][0]["kind"] == "connect" and lg_err["errors"][0]["msg"] == "connection timed out")
+    check("parse_log dns then bind", lg_err["errors"][1]["kind"] == "dns" and lg_err["errors"][2]["kind"] == "bind")
+    check("last_error_msg connect", last_error_msg({"errors": [{"kind": "connect", "msg": "connection timed out"}]}) == 'xmrig: connect error "connection timed out"')
+    app = App(dump=True)
+    app.prev_state = "STARTING"
+    app.start_ts = time.time() - 2
+    app.track({"state": "STOPPED", "api": {}, "acc": 0, "rej": 0, "up": 0, "log": {"shares": [], "errors": []}}, time.time())
+    check("no false stop during start", not any(e["k"] == "stop" for e in app.events) and app.prev_state == "STARTING")
+    app = App(dump=True)
+    app.prev_state = "STARTING"
+    app.start_ts = time.time() - 3
+    app.last_fail = 0
+    live_left = _demo_live("RUNNING")
+    live_left["log"] = {"shares": [], "errors": [{"ts": time.time(), "kind": "connect", "msg": "connection timed out"}]}
+    app.track(live_left, time.time())
+    check("leftover attach warn", any(e["k"] == "warn" and "leftover" in e.get("title", "") for e in app.events))
+    app.last_fail = 1
+    live_left["api"]["connection"]["failures"] = 2
+    app.track(live_left, time.time())
+    fail_ev = [e for e in app.events if e["k"] == "warn" and "Pool connection failed" in e.get("title", "")]
+    check("pool fail quotes xmrig log", bool(fail_ev) and 'connect error "connection timed out"' in fail_ev[-1].get("sub", ""))
 
     for kind in ("home", "home-stopped", "palette", "slash", "usage", "config", "logs", "confirm"):
         for cols, rows in ((110, 36), (80, 24), (60, 18)):
@@ -1932,6 +2196,18 @@ def self_test() -> int:
     check("footer keys", "↵ run" in home and "⌃C quit" in home and "4,178 H/s · 99% of peak" in home)
     stopped = dump_frame("home-stopped", strip=True)
     check("stopped: summary + placeholder", "• Stopped after 16h 8m" in stopped and "Wrote ~/Desktop/XMR-miner-summary" in stopped and "s to mine" in stopped and "not mining" in stopped and "Mining (" not in stopped)
+    app_r = demo_app("home", 152, 49)
+    f152 = app_r.compose(app_r.live())
+    p152 = [plain(ln) for ln in f152]
+    check("compose 152x49", len(f152) == 49 and {vis_len(ln) for ln in f152} == {152} and any("│  hashrate" in ln for ln in p152))
+    app_r.cols, app_r.rows = 90, 24
+    f90 = app_r.compose(app_r.live())
+    p90 = "\n".join(plain(ln) for ln in f90)
+    check("resize 152→90 folds rail live", len(f90) == 24 and {vis_len(ln) for ln in f90} == {90} and "│  hashrate" not in p90 and "now:" in p90)
+    app_r.cols, app_r.rows = 110, 36
+    f110 = app_r.compose(app_r.live())
+    p110 = [plain(ln) for ln in f110]
+    check("resize 90→110 restores rail", len(f110) == 36 and {vis_len(ln) for ln in f110} == {110} and any("│  hashrate" in ln for ln in p110))
     pal = dump_frame("slash", strip=True)
     check("palette groups + digits + status", " miner" in pal and " actions" in pal and " ui" in pal and "▎1 /usage" in pal and " 9 /quit" in pal
           and "4,178 H/s · 1,945 ✓" in pal and "off · rx/0 only" in pal and "running · will refuse" in pal and "Type / for" not in pal)
@@ -1951,6 +2227,7 @@ def self_test() -> int:
     check("usage card", "› /usage" in usage and "XMR Miner · usage" in usage and "Hashrate:" in usage and "[" in usage and "Windows:" in usage and "Cadence:" in usage and "Uptime:      16h 08m 00s" in usage)
     config = dump_frame("config", strip=True)
     check("config card", "Algorithm:" in config and "Job file:" in config and "Edit the plist" in config)
+    check("config priority", "Priority:" in config and "nice -10" in config)
     logs = dump_frame("logs", strip=True)
     check("logs tail", "• Ran tail -n 20 logs/xmrig.log" in logs)
     confirm = dump_frame("confirm", strip=True)
@@ -1974,10 +2251,6 @@ def main() -> int:
         print("miner-ui needs a Terminal window. Click the dock icon, or run it in Terminal.")
         return 1
 
-    def _winch(_sig, _frm):
-        pass
-
-    signal.signal(signal.SIGWINCH, _winch)
     App().loop()
     return 0
 

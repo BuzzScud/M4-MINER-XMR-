@@ -49,6 +49,7 @@ cd "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"
 ./bin/minerctl.sh status
 ./bin/minerctl.sh start
 ./bin/minerctl.sh stop
+./bin/minerctl.sh nice     # try nice -10 (sudo -n, or: sudo ./bin/minerctl.sh nice)
 ```
 
 Live stats: `curl -s http://127.0.0.1:18088/2/summary | python3 -m json.tool`
@@ -70,9 +71,12 @@ only on `s`. Colors are the "Material" palette (9 of `~/Desktop/XMR Miner — Ra
 actions, a lighter blue for data, Google green/red/yellow only for state, on a #202124 ground — the UI asks Terminal for
 that ground with OSC 11 on start and restores your profile on exit. The dock launcher opens 147×58.
 
-The job file passes `--log-file=logs/xmrig.log`, so xmrig writes its own log: the ledger takes share latency, dataset time and
-allocation from it, and `/logs` shows it. Before the first restart with that flag the ledger counts shares from the API instead
-and marks the latency column `~` (it is the pool ping at that moment).
+The job file passes `--log-file=logs/xmrig.log`, so xmrig is the only writer of that file (stdout/stderr go to
+`logs/xmrig.err.log`). The ledger takes share latency, dataset time, allocation and pool connect errors from it, and `/logs`
+shows it. Pool-fail bullets quote the latest `connect error` / `DNS error` line when the log has one. `s` will not start a
+second copy if a leftover xmrig is still on :18088 — it attaches instead; `t` kills every xmrig, not just the pidfile.
+`--cpu-priority=4` is a no-op on macOS without root (xmrig wants nice -10). After start, `minerctl` tries
+`renice -10` then `sudo -n renice -10`; the rail shows the live nice. Passwordless sudo for `/usr/bin/renice` is optional.
 
 ```
 s            start (immediate)

@@ -5,13 +5,40 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import plistlib
 import sys
 from datetime import datetime
 from typing import Optional
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SNAP = os.path.join(ROOT, "logs", "last-session.json")
+PLIST = os.path.join(ROOT, "com.minerv3.xmrig.plist")
 DESKTOP = os.path.expanduser("~/Desktop")
+
+
+def worker_from_plist(path: str = PLIST) -> str:
+    """Pool worker from -u address.worker. Never the API hostname."""
+    try:
+        args = [str(a) for a in (plistlib.load(open(path, "rb")).get("ProgramArguments") or [])]
+    except Exception:
+        return ""
+    user = ""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("-u="):
+            user = a.split("=", 1)[1]
+            break
+        if a == "-u" and i + 1 < len(args):
+            user = args[i + 1]
+            break
+        i += 1
+    if "." not in user:
+        return ""
+    w = user.rsplit(".", 1)[-1]
+    if not w or w.startswith("4"):  # a bare Monero address, not a worker name
+        return ""
+    return w
 
 
 def fmt_hs(v) -> str:
@@ -72,7 +99,7 @@ def snapshot_from_api(api: dict) -> dict:
         "up": api.get("uptime") or conn.get("uptime") or 0,
         "algo": api.get("algo") or "rx/0",
         "pool": conn.get("pool") or "—",
-        "worker": api.get("worker_id") or "—",
+        "worker": worker_from_plist() or None,
         "ping": conn.get("ping"),
         "failures": conn.get("failures"),
         "version": api.get("version"),
@@ -97,11 +124,12 @@ def load_snapshot(api_raw: Optional[str] = None, snap_path: str = SNAP) -> dict:
             if isinstance(data, dict) and "hashrate" in data:
                 snap = snapshot_from_api(data)
                 file_snap = load_json(snap_path) or {}
-                for k in ("threads", "mode", "worker"):
+                for k in ("threads", "mode"):
                     if not snap.get(k) and file_snap.get(k):
                         snap[k] = file_snap[k]
-                if file_snap.get("worker") and (not snap.get("worker") or snap.get("worker") == "—"):
-                    snap["worker"] = file_snap["worker"]
+                pw = worker_from_plist() or file_snap.get("worker")
+                if pw and pw not in ("—", "-", None):
+                    snap["worker"] = pw
                 return snap
             if isinstance(data, dict) and "acc" in data:
                 return data
@@ -199,7 +227,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("ok" if ok else "FAIL")
         if not ok:
             print(text)
-        return 0 if ok else 1
+        api = {
+            "hashrate": {"total": [4178], "highest": 4201},
+            "connection": {"accepted": 1, "rejected": 0, "pool": "gulf.moneroocean.stream:20016"},
+            "worker_id": "Christians-Mac-mini-2.local",
+        }
+        from_api = snapshot_from_api(api)
+        host_ok = from_api.get("worker") != "Christians-Mac-mini-2.local"
+        print("ok  worker is not the host name" if host_ok else "FAIL worker leaked host name: " + str(from_api.get("worker")))
+        if not ok or not host_ok:
+            return 1
+        return 0
 
     raw = sys.stdin.read() if args.api_stdin else None
     snap = load_snapshot(raw, args.snapshot)

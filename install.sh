@@ -110,7 +110,7 @@ cat > "$DEST/$LABEL.plist" <<PLIST
     <key>ThrottleInterval</key><integer>30</integer>
     <key>ProcessType</key><string>Standard</string>
     <key>LowPriorityIO</key><false/>
-    <key>StandardOutPath</key><string>$LOGS/xmrig.log</string>
+    <key>StandardOutPath</key><string>$LOGS/xmrig.err.log</string>
     <key>StandardErrorPath</key><string>$LOGS/xmrig.err.log</string>
 </dict>
 </plist>
