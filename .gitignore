@@ -20,3 +20,8 @@ vendor/
 bin/xmrig.clang17
 bin/xmrig.prebuilt
 XMR-Miner-Portable.zip
+
+# fleet: extra hosts to poll (Tailscale etc.) + the LAN discovery cache
+fleet.local
+logs/fleet.json
+logs/fleet.json.tmp

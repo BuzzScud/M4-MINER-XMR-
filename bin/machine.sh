@@ -19,6 +19,11 @@
 #   THREADS=8
 #   MODE=light
 #   WORKER=minerv3-studio
+#   LAN=off            keep this Mac's API on 127.0.0.1 (the fleet view cannot see it)
+#
+# Fleet: with fleet.token present the API listens on the LAN (0.0.0.0:18088),
+# needs that token, and reports the worker name instead of the host name.
+# Restricted mode stays on: read-only, and /1/config (which holds the wallet) is 403.
 # =============================================================================
 
 POOL="gulf.moneroocean.stream:20016"
@@ -79,6 +84,7 @@ machine_detect() {
   (( RAMGB < 8 )) && MODE="light"
   RXINIT=$CORES
   WORKER="minerv3-$(chip_slug "$CHIP")-${RAMGB}gb"
+  LAN="on"
 
   # machine.local overrides
   local f="$root/machine.local" line k v
@@ -92,6 +98,7 @@ machine_detect() {
         THREADS) [[ "$v" == <-> ]] && (( v >= 1 )) && THREADS=$v ;;
         MODE)    [[ "$v" == fast || "$v" == light ]] && MODE=$v ;;
         WORKER)  [[ -n "$v" ]] && WORKER="${v//[^A-Za-z0-9._-]/}" ;;
+        LAN)     [[ "$v" == on || "$v" == off ]] && LAN=$v ;;
       esac
     done < "$f"
   fi
@@ -117,6 +124,29 @@ read_wallet() {
   return 0
 }
 
+# Sets FLEET_TOKEN from fleet.token (first line that is not a comment), or "" when absent.
+# Only URL-safe characters: the token goes into the plist and an HTTP header unescaped.
+read_fleet_token() {
+  local f="$1/fleet.token"
+  FLEET_TOKEN=""
+  [[ -f "$f" ]] || return 0
+  FLEET_TOKEN=$(grep -v '^#' "$f" | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')
+  if [[ -n "$FLEET_TOKEN" && "$FLEET_TOKEN" == *[^A-Za-z0-9._~+/=-]* ]]; then
+    echo "WARNING: fleet.token has characters outside A-Z a-z 0-9 . _ ~ + / = -; ignoring it (API stays on 127.0.0.1)."
+    FLEET_TOKEN=""
+  fi
+  return 0
+}
+
+# 0.0.0.0 only with a token; without one the API never leaves this Mac.
+api_host() {
+  if [[ "${LAN:-on}" == on && -n "${FLEET_TOKEN:-}" ]]; then
+    print -r -- "0.0.0.0"
+  else
+    print -r -- "127.0.0.1"
+  fi
+}
+
 # True when bin/xmrig carries a slice for this CPU.
 xmrig_has_arch() {
   local bin="$1" arch="$2"
@@ -125,7 +155,10 @@ xmrig_has_arch() {
 
 # The launchd job for this Mac, from the values machine_detect + read_wallet set.
 render_job_file() {
-  local root="$1" logs="$1/logs"
+  local root="$1" logs="$1/logs" token_line=""
+  if [[ -n "${FLEET_TOKEN:-}" ]]; then
+    token_line=$'\n'"        <string>--http-access-token=$FLEET_TOKEN</string>"
+  fi
   cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -148,8 +181,9 @@ render_job_file() {
         <string>--cpu-priority=4</string>
         <string>--threads=$THREADS</string>
         <string>--cpu-no-yield</string>
-        <string>--http-host=127.0.0.1</string>
-        <string>--http-port=18088</string>
+        <string>--http-host=$(api_host)</string>
+        <string>--http-port=18088</string>$token_line
+        <string>--api-worker-id=$WORKER</string>
         <string>--donate-level=0</string>
         <string>--print-time=30</string>
         <string>--no-color</string>
@@ -175,6 +209,7 @@ write_job_file() {
   local root="$1" only_if_changed="${2:-}" out="$1/$LABEL.plist" tmp
   machine_detect "$root" || return 1
   read_wallet "$root" || return 1
+  read_fleet_token "$root"
   tmp=$(mktemp "${TMPDIR:-/tmp}/minerjob.XXXXXX") || return 1
   render_job_file "$root" > "$tmp"
   if [[ "$only_if_changed" == "--if-changed" && -f "$out" ]] && cmp -s "$tmp" "$out"; then
@@ -199,12 +234,20 @@ machine_print() {
   echo "  Mode:    $MODE"
   echo "  Worker:  $WORKER"
   echo "  Pool:    $POOL"
+  if [[ "$(api_host)" == 0.0.0.0 ]]; then
+    echo "  API:     0.0.0.0:18088 (LAN, token from fleet.token)"
+  elif [[ -n "${FLEET_TOKEN:-}" ]]; then
+    echo "  API:     127.0.0.1:18088 (LAN=off in machine.local)"
+  else
+    echo "  API:     127.0.0.1:18088 (no fleet.token)"
+  fi
 }
 
 if [[ "${ZSH_EVAL_CONTEXT:-}" == "toplevel" ]]; then
   set -uo pipefail
   _root="${0:A:h:h}"
   machine_detect "$_root"
+  read_fleet_token "$_root"
   machine_print
   if [[ -f "$_root/machine.local" ]]; then
     echo "  Overrides: machine.local"

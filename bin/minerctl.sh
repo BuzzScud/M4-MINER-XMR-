@@ -1,8 +1,9 @@
 #!/bin/zsh
 # Control helper. Starts xmrig from this process (not launchd).
 # launchd cannot run binaries under Desktop (TCC hang: 0% CPU, empty logs).
-# Subcommands: status | start | stop | kill | nice | job
+# Subcommands: status | start | stop | kill | nice | job | fleet [...]
 # The job file is rendered for THIS Mac at every start (bin/machine.sh).
+# fleet: every Mac's miner at once (bin/fleet.py; `fleet here` checks this Mac).
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -14,8 +15,19 @@ API="http://127.0.0.1:18088/2/summary"
 HTTP_PORT=18088
 
 source "$ROOT/bin/machine.sh"
+read_fleet_token "$ROOT" >/dev/null
 
 mkdir -p "$LOGS"
+
+# GET the local API. With fleet.token the xmrig API wants "Bearer <token>"; an xmrig
+# started before the token existed answers 401 to any Authorization header, so retry bare.
+api_curl() {
+  local url="$1"; shift
+  if [[ -n "${FLEET_TOKEN:-}" ]]; then
+    curl -sf -H "Authorization: Bearer $FLEET_TOKEN" "$@" "$url" 2>/dev/null && return 0
+  fi
+  curl -sf "$@" "$url" 2>/dev/null
+}
 
 xmrig_pids() {
   pgrep -x xmrig 2>/dev/null || true
@@ -26,7 +38,7 @@ listen_pids() {
 }
 
 api_up() {
-  curl -sf --max-time 1 -o /dev/null "$API" 2>/dev/null
+  api_curl "$API" --max-time 1 -o /dev/null
 }
 
 is_up() {
@@ -124,7 +136,7 @@ case "${1:-status}" in
 
   status)
     if ! is_up; then echo "STOPPED"; exit 0; fi
-    J=$(curl -s --max-time 4 "$API" 2>/dev/null)
+    J=$(api_curl "$API" --max-time 4)
     if [[ -z "$J" ]]; then echo "STARTING"; exit 0; fi
     echo "$J" | python3 -c '
 import json,sys
@@ -152,13 +164,19 @@ print(f"Pool: {pool}")
     machine_print
     ;;
 
+  fleet)
+    # Every Mac at once: LAN API (token) + the pool's per-worker view. Read-only.
+    shift
+    exec python3 "$ROOT/bin/fleet.py" "$@"
+    ;;
+
   start)
     if is_up; then
       echo "Already running."
       pids=$(xmrig_pids)
       [[ -n $pids ]] && echo "PID: ${pids//$'\n'/ }"
       if api_up; then
-        curl -s --max-time 2 "$API" 2>/dev/null | python3 -c '
+        api_curl "$API" --max-time 2 | python3 -c '
 import json,sys
 try:
     d=json.load(sys.stdin)
@@ -214,7 +232,7 @@ except Exception:
   stop|kill)
     if ! is_up; then echo "Not running."; exit 0; fi
     reason="${1:-stop}"
-    J=$(curl -s --max-time 2 "$API" 2>/dev/null || true)
+    J=$(api_curl "$API" --max-time 2 || true)
     if [[ -n $J ]]; then
       print -r -- "$J" | python3 "$ROOT/bin/write-session-summary.py" --reason "$reason" --api-stdin || true
     else

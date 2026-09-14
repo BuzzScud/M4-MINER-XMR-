@@ -24,6 +24,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Optional
 
+import fleet  # bin/fleet.py: the API token, and every Mac at once
+
 ROOT = os.environ.get("MINER_ROOT") or os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CTL = os.path.join(ROOT, "bin", "minerctl.sh")
 LOG = os.path.join(ROOT, "logs", "xmrig.log")
@@ -83,7 +85,8 @@ class Cmd:
 
 COMMANDS = (
     Cmd("/usage", "Status, speed, shares, pool", "usage", "miner"),
-    Cmd("/config", "Threads, mode, pool, worker", "config", "miner"),
+    Cmd("/fleet", "Every Mac: LAN API + pool", "fleet", "miner"),
+    Cmd("/config","Threads, mode, pool, worker", "config", "miner"),
     Cmd("/logs", "Last 20 lines of xmrig.log", "logs", "miner"),
     Cmd("/err", "Last 20 lines of the error log", "err", "miner"),
     Cmd("/open", "Open this folder in Finder", "open", "actions"),
@@ -102,6 +105,9 @@ ALIASES = {
     "/plist": "config",
     "/error": "err",
     "/refresh": "usage",
+    "/macs": "fleet",
+    "/machines": "fleet",
+    "fleet": "fleet",
     "usage": "usage",
     "status": "usage",
     "logs": "logs",
@@ -111,7 +117,7 @@ ALIASES = {
     "?": "help",
 }
 
-TABS = ("Usage", "Config", "Logs")
+TABS = ("Usage", "Fleet", "Config", "Logs")
 
 
 _ANSI = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
@@ -219,6 +225,8 @@ def parse_job(path: str = PLIST) -> dict:
             "worker": worker or "-",
             "user": user or "-",
             "http": d.get("--http-port", "18088"),
+            "http_host": d.get("--http-host", "127.0.0.1"),
+            "token": bool(d.get("--http-access-token")),
             "cwd": p.get("WorkingDirectory") or ROOT,
             "donate": d.get("--donate-level", "0"),
             "tls": "--tls" in args,
@@ -240,12 +248,13 @@ def tls_label(conn: Optional[dict], job: Optional[dict] = None) -> str:
     return "plain"
 
 
+FLEET_TOKEN = fleet.read_token()
+
+
 def api_get(url: str) -> Optional[dict]:
-    try:
-        with urllib.request.urlopen(url, timeout=1.2) as r:
-            return json.load(r)
-    except Exception:
-        return None
+    """The local API. With fleet.token it wants the token; a pre-token xmrig is retried bare."""
+    d, st = fleet.api_json(url, FLEET_TOKEN, 1.2)
+    return d if st == "ok" else None
 
 
 def api_summary() -> Optional[dict]:
@@ -702,6 +711,8 @@ class App:
     last_resize: float = 0.0
     _winch_r: Optional[int] = None
     _clear_next: bool = False
+    fleet_fixed: Optional[tuple] = None  # canned (rows, meta) for --dump and the self-test
+    fleet_w: Optional[object] = None     # fleet.Watcher, started on the first frame
 
     # ------------------------------------------------------------------ plumbing
     def tty_size(self) -> tuple[int, int]:
@@ -806,6 +817,14 @@ class App:
             if run:
                 return f"{fmt_hs(live['hs'])} · {fmt_n(live['acc'])} ✓" + ("" if compact else f" · {fmt_uptime(live['up'])}")
             return "building dataset" if state == "STARTING" else "not mining"
+        if a == "fleet":
+            fs = self.fleet_latest()
+            if not fs:
+                return "looking for Macs…"
+            m = fs[1]
+            if compact:
+                return f"{m.get('mining', 0)}/{m.get('macs', 0)} · {fmt_hs(m.get('total'))}"
+            return f"{m.get('mining', 0)} of {m.get('macs', 0)} mining · {fmt_hs(m.get('total'))}"
         if a == "config":
             j = live["job"]
             return f"{j.get('algo', '-')} {j.get('mode', '-')} · {j.get('threads', '-')} threads"
@@ -921,6 +940,19 @@ class App:
             ni = None
         self.nice_cache = (now, ni)
         return ni
+
+    def fleet_latest(self) -> Optional[tuple]:
+        """(rows, meta) for every Mac, from a background thread (LAN 5 s, pool 60 s). Never blocks."""
+        if self.fleet_fixed is not None:
+            return self.fleet_fixed
+        if self.dump:
+            return None
+        if self.fleet_w is None:
+            try:
+                self.fleet_w = fleet.Watcher()
+            except Exception:
+                return None
+        return self.fleet_w.latest()  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------ ledger model
     def add(self, kind: str, **kw) -> dict:
@@ -1136,6 +1168,19 @@ class App:
             R.append(f"{SEC}last ran {fmt_uptime(snap.get('up') or 0)} · {snap.get('saved_at', '')[11:16]}{INK}")
         else:
             R.append(f"{SEC}nothing yet{INK}")
+        # fleet: every Mac on this wallet (bin/fleet.py). Last, so it is the first to go when short.
+        fs = self.fleet_latest()
+        R.append("")
+        if fs:
+            frows, fmeta = fs
+            R.append(lab("fleet", f"{fmeta.get('mining', 0)} of {fmeta.get('macs', 0)} · {fmt_hs(fmeta.get('total'))}"))
+            for fr in frows[:4]:
+                R.append(fit_row(*self.fleet_cells(fr), W))
+            if len(frows) > 4:
+                R.append(f"{FAINT}+{len(frows) - 4} more · /fleet{INK}")
+        else:
+            R.append(lab("fleet", "looking…"))
+            R.append(f"{FAINT}LAN every 5 s · pool every 60 s{INK}")
         # fit: drop whole sections from the bottom until it fits
         while len(R) > avail:
             idx = max((i for i, ln in enumerate(R) if ln == ""), default=0)
@@ -1144,6 +1189,18 @@ class App:
                 break
             R = R[:idx]
         return [clip_row(ln, W) for ln in R]
+
+    FLEET_TINT = {"mining": GOOD, "starting": WARN, "paused": WARN, "pool": WARN, "no token": BAD, "error": BAD}
+
+    def fleet_cells(self, r: dict) -> tuple[str, str]:
+        """One rail row for one Mac: mark + short name on the left, H/s (or its state) + where from on the right."""
+        st = r["state"]
+        col = self.FLEET_TINT.get(st, FAINT)
+        name = r["worker"][8:] if r["worker"].startswith("minerv3-") else r["worker"]
+        right = fmt_hs(fleet.eff_hs(r)) if st in fleet.ACTIVE else st
+        via = "here" if r["here"] else ("LAN" if r["via"] == "lan" else "pool")
+        return (f"{col}{fleet.MARK.get(st, '?')}{INK} {trunc(name, 15)}",
+                f"{INK if st in fleet.ACTIVE else SEC}{right}{FAINT} {via:>4}{INK}")
 
     def now_row(self, live: dict, label: str = "now:     ") -> str:
         """The live line of the job card: what is happening right now, in one glance."""
@@ -1322,7 +1379,7 @@ class App:
         w = min(86, self.lw)
         inner = w - 4
         out.append(self.r(f"{FAINT}╭{'─' * (w - 2)}╮{INK}"))
-        head = fit_row(f"{CYAN}{BOLD}>_ {INK}XMR Miner{NOBOLD}{SEC} · {tab.lower()}{INK}", f"{FAINT}←/→ usage · config · logs{INK}", inner)
+        head = fit_row(f"{CYAN}{BOLD}>_ {INK}XMR Miner{NOBOLD}{SEC} · {tab.lower()}{INK}", f"{FAINT}←/→ usage · fleet · config · logs{INK}", inner)
         out.append(self.r(f"{FAINT}│{INK} {head} {FAINT}│{INK}"))
         if not tight:
             out.append(self.r(f"{FAINT}│{INK} {' ' * inner} {FAINT}│{INK}"))
@@ -1340,6 +1397,30 @@ class App:
         job = live["job"]
         state = live["state"]
         run = state == "RUNNING"
+        if tab == "Fleet":
+            fs = self.fleet_latest()
+            if not fs:
+                return [kv("Fleet", "looking for Macs…"), "", f"  {SEC}LAN every 5 s · pool every 60 s · minerctl fleet for the same table{INK}"]
+            frows, m = fs
+            pool_s = (f"pool {fmt_hs(m.get('pool_total'))} · {fleet.age(m.get('pool_at'))} ago" if m.get("pool") == "ok"
+                      else f"pool: {m.get('pool')}")
+            rows = [kv("Total", f"{BOLD}{fmt_hs(m.get('total'))}{NOBOLD}{SEC} · {m.get('mining', 0)} of {m.get('macs', 0)} mining · {pool_s}{INK}"), ""]
+            for fr in frows:
+                st = fr["state"]
+                col = self.FLEET_TINT.get(st, FAINT)
+                hs_s = fmt_hs(fleet.eff_hs(fr)) if st in fleet.ACTIVE else "—"
+                sh = f"{fmt_n(fr['acc'])} ✓" if fr.get("acc") is not None else "—"
+                via = "this Mac" if fr["here"] else ("LAN" if fr["via"] == "lan" else "pool")
+                up = fmt_uptime(fr["up"]) if fr.get("up") else "—"
+                rows.append(f"  {col}{fleet.MARK.get(st, '?')}{INK} {trunc(fr['worker'], 22):<22} {col}{st:<8}{INK} {hs_s:>11} "
+                            f"{sh:>9} {SEC}{up:>7}  {via}{INK}")
+                if fr.get("note"):
+                    rows.append(f"      {SEC}└ {fr['note']}{INK}")
+            rows += ["", f"  {SEC}LAN every 5 s · pool every 60 s · last LAN scan {fleet.age(m.get('scan_at'))} ago{INK}",
+                     f"  {SEC}On another Mac, ./bin/minerctl.sh fleet here says what this Mac can see of it{INK}"]
+            if not m.get("token"):
+                rows.append(f"  {WARN}fleet.token is missing: this Mac and the pool only{INK}")
+            return rows
         if tab == "Config":
             flex = os.path.isfile(os.path.join(ROOT, "flex.on"))
             rows = [
@@ -1349,7 +1430,9 @@ class App:
                 kv("Init", str(job.get("init") or "—")),
                 kv("Pool", job.get("pool") or "—"),
                 kv("Worker", job.get("worker") or "—"),
-                kv("HTTP API", f"127.0.0.1:{job.get('http', '18088')}"),
+                kv("HTTP API", f"{job.get('http_host', '127.0.0.1')}:{job.get('http', '18088')}"
+                   + (f"{SEC} · LAN, token from fleet.token{INK}" if job.get("http_host") == "0.0.0.0"
+                      else f"{SEC} · this Mac only{INK}")),
                 kv("Donate", f"{job.get('donate') or '0'}%"),
                 kv("Priority", "--cpu-priority=4 → nice -10 (needs root)"),
                 kv("Flex", "on · pool picks the algo" if flex else "off · rx/0 only"),
@@ -1519,7 +1602,7 @@ class App:
             want = len(self.palette_lines(True))
             if want > avail:
                 want = len(self.palette_lines(False))
-            pal_n = max(1, min(want or 1, 12, avail))
+            pal_n = max(1, min(want or 1, 14, avail))
         status = self.status_row(live) if (self.mode == "home" and not pal) else None
         if self.mode == "confirm":
             status = self.r(f"{SEC}• {INK}Offline sweep{SEC} · ~10 minutes · mines nothing · refuses if the miner is running · type yes{INK}")
@@ -1728,6 +1811,8 @@ class App:
             return False
         if action == "usage":
             self.open_overlay("Usage")
+        elif action == "fleet":
+            self.open_overlay("Fleet")
         elif action == "config":
             self.open_overlay("Config")
         elif action == "logs":
@@ -1901,7 +1986,7 @@ class App:
         if key == "e" and TABS[self.tab] == "Logs":
             self.log_which = "log" if self.log_which == "err" else "err"
             return True
-        if key in "123":
+        if key in "1234":
             i = int(key) - 1
             if i < len(TABS):
                 self.tab = i
@@ -2021,6 +2106,22 @@ def _demo_live(state: str = "RUNNING") -> dict:
     return {"state": state, "job": job, "api": api, "hs": 4178.4 if state == "RUNNING" else None, "highest": PEAK_HS, "acc": 1945, "rej": 0, "up": 58080, "algo": "rx/0", "hugepages": [0, 1178], "log": empty_log}
 
 
+def _demo_fleet() -> tuple:
+    now = time.time()
+    base = {"hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "note": "", "host": ""}
+    rows = [
+        dict(base, worker="minerv3-m4-16gb", here=True, host="127.0.0.1", via="lan", state="mining", hs=4178.4,
+             hs15=4166.1, acc=1945, rej=0, up=58080, pool_hs=4012.0, lts=now - 12),
+        dict(base, worker="minerv3-m2-8gb", here=False, host="192.0.2.23", via="lan", state="mining", hs=3237.1,
+             hs15=3190.0, acc=812, rej=0, up=18120, pool_hs=3237.1, lts=now - 4),
+        dict(base, worker="minerv3-i7-6700hq-16gb", here=False, via="pool", state="pool", hs=None, pool_hs=687.2,
+             lts=now - 16, note="not found on this LAN yet: update it (git pull, then t and s)"),
+    ]
+    meta = {"total": 4178.4 + 3237.1 + 687.2, "mining": 3, "macs": 3, "pool": "ok", "pool_at": now - 40,
+            "pool_total": 7936.3, "scan_at": now - 180, "token": True, "at": now}
+    return rows, meta
+
+
 def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
     """A frame from canned data, for --dump and the self-test. Touches no miner."""
     app = App(dump=True, cols=cols, rows=rows)
@@ -2031,6 +2132,7 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
     kind = kind.replace("-stopped", "").replace("-starting", "")
     live = _demo_live("STOPPED" if stopped else "STARTING" if starting else "RUNNING")
     app.fixed_live = live
+    app.fleet_fixed = _demo_fleet()
     now = time.time()
     if starting:
         app.start_ts = now - 3.2
@@ -2070,9 +2172,9 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
             app.hist[i] = 3651 + abs(i - 121.5) * 70
     if kind in ("palette", "slash", "/"):
         app.force_palette = "/" if kind != "palette" else "/usage"
-    elif kind in ("usage", "config", "logs", "err"):
+    elif kind in ("usage", "fleet", "config", "logs", "err"):
         app.mode = "overlay"
-        app.tab = TABS.index({"usage": "Usage", "config": "Config"}.get(kind, "Logs"))
+        app.tab = TABS.index({"usage": "Usage", "fleet": "Fleet", "config": "Config"}.get(kind, "Logs"))
         app.log_which = "err" if kind == "err" else "log"
     elif kind == "confirm":
         app.mode = "confirm"
@@ -2104,7 +2206,8 @@ def self_test() -> int:
     check("unknown empty", filter_cmds("/xyznope") == [])
     check("alias /stats", resolve_action("/stats", None) == "usage")
     check("alias /plist", resolve_action("/plist", None) == "config")
-    check("tabs are Usage Config Logs", TABS == ("Usage", "Config", "Logs"))
+    check("tabs are Usage Fleet Config Logs", TABS == ("Usage", "Fleet", "Config", "Logs"))
+    check("alias /macs", resolve_action("/macs", None) == "fleet" and resolve_action("/fleet", None) == "fleet")
     check("hugepages list", fmt_hugepages([2080, 2080]) == "2080/2080 (100%)")
     check("hugepages bool", fmt_hugepages(True) == "yes" and fmt_hugepages(False) == "no")
     check("hugepages none", fmt_hugepages(None) == "—")
@@ -2165,7 +2268,7 @@ def self_test() -> int:
     fail_ev = [e for e in app.events if e["k"] == "warn" and "Pool connection failed" in e.get("title", "")]
     check("pool fail quotes xmrig log", bool(fail_ev) and 'connect error "connection timed out"' in fail_ev[-1].get("sub", ""))
 
-    for kind in ("home", "home-stopped", "palette", "slash", "usage", "config", "logs", "confirm"):
+    for kind in ("home", "home-stopped", "palette", "slash", "usage", "fleet", "config", "logs", "confirm"):
         for cols, rows in ((110, 36), (80, 24), (60, 18)):
             frame = dump_frame(kind, cols, rows)
             lines = frame.rstrip("\n").split("\n")
@@ -2210,9 +2313,12 @@ def self_test() -> int:
     p110 = [plain(ln) for ln in f110]
     check("resize 90→110 restores rail", len(f110) == 36 and {vis_len(ln) for ln in f110} == {110} and any("│  hashrate" in ln for ln in p110))
     pal = dump_frame("slash", strip=True)
-    check("palette groups + digits + status", " miner" in pal and " actions" in pal and " ui" in pal and "▎1 /usage" in pal and " 9 /quit" in pal
-          and "4,178 H/s · 1,945 ✓" in pal and "off · rx/0 only" in pal and "running · will refuse" in pal and "Type / for" not in pal)
-    check("palette hints row", "1 of 9" in pal and "1–9 run" in pal)
+    check("palette groups + digits + status", " miner" in pal and " actions" in pal and " ui" in pal and "▎1 /usage" in pal and " 9 /help" in pal
+          and "   /quit" in pal and "4,178 H/s · 1,945 ✓" in pal and "off · rx/0 only" in pal and "running · will refuse" in pal and "Type / for" not in pal)
+    check("palette fleet status (compact beside the rail)", " 2 /fleet" in pal and "3/3 · 8,103 H/s" in pal)
+    wide = dump_frame("slash", 147, 58, strip=True)  # the launcher size: a 109-col pane beside the rail
+    check("palette fleet status (wide)", "3 of 3 mining · 8,103 H/s" in wide)
+    check("palette hints row", "1 of 10" in pal and "1–9 run" in pal)
     pal2 = dump_frame("palette", strip=True)
     pal_rows = [ln for ln in pal2.split("\n") if "/usage" in ln or ln.strip() in ("miner", "actions", "ui", "recent")]
     check("palette filter is flat + selected", not any(ln.strip() in ("miner", "actions", "ui") for ln in pal2.split("\n")) and "▎1 /usage" in pal2 and "1 of 1" in pal2)
@@ -2229,6 +2335,16 @@ def self_test() -> int:
     config = dump_frame("config", strip=True)
     check("config card", "Algorithm:" in config and "Job file:" in config and "Edit the plist" in config)
     check("config priority", "Priority:" in config and "nice -10" in config)
+    check("config API row", "HTTP API:" in config and (":18088 · LAN, token from fleet.token" in config or ":18088 · this Mac only" in config))
+    fl = dump_frame("fleet", strip=True)
+    check("fleet card", "› /fleet" in fl and "XMR Miner · fleet" in fl and "Total:" in fl and "8,103 H/s · 3 of 3 mining" in fl
+          and "● minerv3-m4-16gb" in fl and "this Mac" in fl and "◍ minerv3-i7-6700hq-16gb" in fl and "└ not found on this LAN yet" in fl)
+    check("fleet card never shows a peer address", "192.0.2.23" not in fl)
+    tall = dump_frame("home", 147, 58, strip=True).split("\n")
+    check("rail fleet section at 147x58", any("│  fleet" in ln and "3 of 3 · 8,103 H/s" in ln for ln in tall)
+          and any("m2-8gb" in ln and "3,237 H/s  LAN" in ln for ln in tall) and any("i7-6700hq-16gb" in ln and "pool" in ln for ln in tall))
+    app_nf = demo_app("home", 147, 58); app_nf.fleet_fixed = None
+    check("rail fleet before the first poll", any("│  fleet" in ln and "looking…" in ln for ln in (plain(x) for x in app_nf.compose(app_nf.live()))))
     logs = dump_frame("logs", strip=True)
     check("logs tail", "• Ran tail -n 20 logs/xmrig.log" in logs)
     confirm = dump_frame("confirm", strip=True)

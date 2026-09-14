@@ -10,7 +10,8 @@ Home: wherever this folder lives (this M4: `/Users/christiantavarez/Desktop/PROJ
 
 ```
 bin/                 xmrig (universal arm64 + x86_64, 6.26.0), machine.sh (chip/threads/mode/worker + the job file),
-                     miner-ui.py (the Terminal UI), minerctl.sh (start/stop/status/job), write-session-summary.py,
+                     miner-ui.py (the Terminal UI), minerctl.sh (start/stop/status/job/fleet), fleet.py (every Mac
+                     at once: LAN API + pool), write-session-summary.py,
                      xmr_bench_sweep.sh, the dock launcher's AppleScript and icon
 XMR Miner.app/       dock launcher: opens Terminal at 147×58 with the UI; never starts mining by itself
 logs/                xmrig.log / xmrig.err.log (from --log-file), last-session.json, the pid file   (local only)
@@ -22,7 +23,9 @@ lab/crystalline-rx-formula/   R = F(K, H) rebuilt from crystalline primitives on
 install.sh           signs xmrig, writes the job file for this Mac, rebuilds the dock app; once per Mac; starts nothing
 wallet.local         the payout address (public receive address only; tracked in git so every Mac mines to it)
 com.minerv3.xmrig.plist(.example)   the job file, rendered per Mac at install and every start (gitignored)
-machine.local        optional tuning overrides for this Mac: THREADS= / MODE= / WORKER= (gitignored)
+machine.local        optional tuning overrides for this Mac: THREADS= / MODE= / WORKER= / LAN=off (gitignored)
+fleet.token          the API access token every Mac shares (tracked, like wallet.local; see Fleet)
+fleet.local          optional extra hosts for the fleet view, one host[:port] per line (gitignored)
 vendor/              local xmrig source checkout (gitignored); XMR-Miner-Portable.zip, bin/xmrig.* extras (gitignored)
 ```
 
@@ -62,10 +65,13 @@ cd "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"
 ./bin/minerctl.sh stop
 ./bin/minerctl.sh nice     # try nice -10 (sudo -n, or: sudo ./bin/minerctl.sh nice)
 ./bin/minerctl.sh job      # render the job file for this Mac and print the profile
-./bin/machine.sh           # chip, cores, RAM, threads, mode, worker, binary slices
+./bin/machine.sh           # chip, cores, RAM, threads, mode, worker, API bind, binary slices
+./bin/minerctl.sh fleet    # every Mac on this wallet (add --watch, --json, -v for addresses)
+./bin/minerctl.sh fleet here   # on any Mac: can the others see this one? (bind, token, LAN, firewall)
+./bin/minerctl.sh fleet scan   # look for miners on this subnet now
 ```
 
-Live stats: `curl -s http://127.0.0.1:18088/2/summary | python3 -m json.tool`
+Live stats: `curl -s -H "Authorization: Bearer $(tail -1 fleet.token)" http://127.0.0.1:18088/2/summary | python3 -m json.tool`
 
 Logs: `logs/xmrig.log` and `logs/xmrig.err.log`
 
@@ -78,7 +84,8 @@ Ledger — job card, then a scrollback of `•` bullets with `└` results (star
 with #, time, diff, latency, ✓/✗, stop, Desktop summary path); `/usage`, `/config`, `/logs` print as cards (`←/→` cycles,
 `esc` returns). At 100 columns or more a quiet rail on the right always shows hashrate with a sparkline of the UI's own
 1-second samples and the 10s/60s/15m windows, shares with per-minute bars and a next-share estimate, per-thread load from
-`/2/backends`, pool, dataset, machine and session. Below 100 columns the rail folds away and the card carries a live `now:`
+`/2/backends`, pool, dataset, machine, session, and the fleet (every Mac on this wallet; first to drop when
+the window is short). Below 100 columns the rail folds away and the card carries a live `now:`
 row instead; at 24 rows or fewer the card collapses to 3 rows. The only motion is the shimmer on "Mining". Mining starts
 only on `s`. Colors are the "Material" palette (9 of `~/Desktop/XMR Miner — Rail Palettes.html`): Google blue for
 actions, a lighter blue for data, Google green/red/yellow only for state, on a #202124 ground — the UI asks Terminal for
@@ -98,6 +105,7 @@ q / ⌃C       quit UI (does not stop a running miner)
 /            command palette: grouped (recent · miner · actions · ui), ↑↓ pick, 1–9 run,
              tab complete, ↵ run, esc close; each row shows what it would find right now
 /usage       card: hashrate, windows, shares, cadence, threads, dataset, pool, machine, uptime
+/fleet       card: every Mac on this wallet: state, H/s, shares, uptime, LAN or pool (also /macs)
 /config      card: threads, mode, pool, worker, flex, job file
 /logs        tail -n 20 of xmrig.log (e switches to the error log)
 /err         tail -n 20 of xmrig.err.log
@@ -113,6 +121,39 @@ Checks that touch no miner: `python3 bin/miner-ui.py --self-test` and
 `python3 bin/miner-ui.py --dump home|home-stopped|home-starting|slash|usage|config|logs|confirm [cols rows] [--plain]`.
 
 If the dock icon is a question mark, drag `XMR Miner.app` from this folder onto the dock.
+
+## Fleet (every Mac, from any one)
+
+Any Mac running this folder can show all of them: `/fleet` in the UI, the fleet section at the foot of the rail, or
+`./bin/minerctl.sh fleet`. Two sources, merged by worker name:
+
+- **LAN**: each Mac's own xmrig HTTP API, the one the UI already reads. The job file now binds it to `0.0.0.0:18088`,
+  requires the token in `fleet.token`, and sets `--api-worker-id` so it reports `minerv3-m2-8gb`, not the host name.
+  It stays in xmrig's restricted mode: read-only, and `/1/config` (the only endpoint that holds the wallet) answers 403.
+  Live numbers: 10s/60s/15m, shares, uptime, pool, ping. Polled every 5 s while the UI is open. Nothing extra runs.
+- **Pool**: MoneroOcean's per-worker stats for the wallet. About a minute behind, but it works from anywhere, so a Mac
+  on another network still shows (as `pool`). Polled every 60 s.
+
+Macs are found without configuration: the fleet view scans this Mac's subnet for :18088 answering with the token and
+remembers each one by worker name in `logs/fleet.json`, so a new DHCP address is found again. It rescans at most every
+5 minutes, and only when the pool reports a worker the LAN view has not found.
+
+**Set up each other Mac once:** `git pull` in this folder (or copy the folder again), then **t** and **s** in the UI
+(or `minerctl stop` then `start`) so xmrig restarts with the LAN job file. `./bin/minerctl.sh fleet here` on that
+Mac checks the bind, the token, the LAN address and the macOS firewall. If the firewall is on, click Allow when macOS
+asks about xmrig, or run the `socketfilterfw --unblockapp` line `fleet here` prints.
+
+States: `mining` (LAN), `pool` (the pool gets its shares but the LAN API is not visible: not updated yet, another
+network, or a firewall; the row says which), `stopped` (the Mac answered, the miner is not running), `offline` (no
+answer: asleep, off, away), `no token` (its `fleet.token` differs), `idle` (the pool has had no share for 10 minutes).
+
+- Another network: put the Macs on Tailscale (or ZeroTier) and list their names in `fleet.local`, one `host[:port]` per
+  line. Do not port-forward 18088 to the internet.
+- Keep one Mac off the LAN: `LAN=off` in its `machine.local` (API back on 127.0.0.1; the pool still shows it).
+- `fleet.token` is tracked in git on purpose (private repo) so every Mac shares it with a `git pull`. It only unlocks
+  read-only stats. To rotate it: replace the line, commit, pull on every Mac, **t** and **s** on each. Rotate it if the
+  repo ever goes public.
+- Because it is xmrig's own API, XMRig dashboards and monitors that take a URL plus an access token work as well.
 
 ## Other Macs / re-install
 
