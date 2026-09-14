@@ -285,7 +285,7 @@ DOWN_NOTE = {
     "timeout": ("offline", "no answer: asleep, off, or another network"),
     "unreachable": ("offline", "no route: asleep, off, or another network"),
     "dns": ("offline", "unknown host name"),
-    "auth": ("no token", "its fleet.token differs: git pull there, then t and s"),
+    "auth": ("no token", "its fleet.token differs: update it (reopen XMR Miner there, then s)"),
 }
 
 
@@ -422,10 +422,10 @@ class Fleet:
                                  "state": "pool" if fresh else "idle",
                                  "note": "" if fresh else "no share for a while"}
                 if fresh and not row["here"]:
-                    row["note"] = "not found on this LAN yet: update it (git pull, then t and s)"
+                    row["note"] = "not found on this LAN yet: update it (reopen XMR Miner there, then s)"
             elif row["state"] not in ACTIVE and fresh and not row["here"]:
                 # the pool still gets its shares, so the Mac is mining; only the LAN view is missing
-                why = {"stopped": "its API is local-only: update it (git pull, then t and s)",
+                why = {"stopped": "its API is local-only: update it (reopen XMR Miner there, then s)",
                        "no token": row["note"]}.get(row["state"], "mining, but not reachable from here")
                 row.update(state="pool", note=why)
             row["pool_hs"], row["lts"] = p["hs"], p["lts"]
@@ -532,7 +532,7 @@ def here() -> int:
     print(f"  firewall   {'on' if fw else 'off' if fw is False else '?'}")
     tips = []
     if not tok:
-        tips.append("fleet.token is missing: git pull (it is tracked in the repo).")
+        tips.append("fleet.token is missing: ./bin/minerctl.sh update (it is tracked in the repo).")
     if host != "0.0.0.0" and tok:
         tips.append("The job file keeps the API local (LAN=off in machine.local?).")
     if loc["status"] == "ok" and lan and lan["status"] != "ok" and host == "0.0.0.0":
@@ -605,7 +605,7 @@ def self_test() -> int:
     by = {r["worker"]: r for r in rows}
     check("rows: this Mac first, then by H/s", names[:3] == ["minerv3-m4-16gb", "minerv3-m2-8gb", "minerv3-i7-6700hq-16gb"])
     check("rows: LAN beats pool for H/s", by["minerv3-m2-8gb"]["hs"] == 3200.5 and by["minerv3-m2-8gb"]["pool_hs"] == 3100.0)
-    check("rows: pool-only Mac", by["minerv3-i7-6700hq-16gb"]["state"] == "pool" and "git pull" in by["minerv3-i7-6700hq-16gb"]["note"])
+    check("rows: pool-only Mac", by["minerv3-i7-6700hq-16gb"]["state"] == "pool" and "reopen XMR Miner" in by["minerv3-i7-6700hq-16gb"]["note"])
     check("rows: idle worker", by["old-rig"]["state"] == "idle")
     meta = f.meta(rows)
     check("meta total", meta["mining"] == 3 and abs(meta["total"] - (4100 + 3200.5 + 687)) < 0.01)

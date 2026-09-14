@@ -69,7 +69,9 @@ cd "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"
 ./bin/minerctl.sh fleet    # every Mac on this wallet (add --watch, --json, -v for addresses)
 ./bin/minerctl.sh fleet here   # on any Mac: can the others see this one? (bind, token, LAN, firewall)
 ./bin/minerctl.sh fleet scan   # look for miners on this subnet now
-./bin/minerctl.sh update   # git pull from GitHub, re-run install (no prompt), restart xmrig if it was running
+./bin/minerctl.sh release "what changed"   # main Mac: commit, push, release to the other Macs (see Releases)
+./bin/minerctl.sh update   # follower: become the latest release now (opening the app does it); miner left stopped
+./bin/minerctl.sh role     # main or follower (see Releases)
 ./bin/minerctl.sh perf     # threads now; perf up | down | max | eco | auto | 6 | 75%
 ./bin/minerctl.sh config   # every setting; config set KEY=value | unset KEY | edit | reset | help
 ./bin/minerctl.sh bench    # offline thread sweep (stop the miner first); prints the perf line to use
@@ -183,8 +185,8 @@ Macs are found without configuration: the fleet view scans this Mac's subnet for
 remembers each one by worker name in `logs/fleet.json`, so a new DHCP address is found again. It rescans at most every
 5 minutes, and only when the pool reports a worker the LAN view has not found.
 
-**Set up each other Mac once:** `git pull` in this folder (or copy the folder again), then **t** and **s** in the UI
-(or `minerctl stop` then `start`) so xmrig restarts with the LAN job file. `./bin/minerctl.sh fleet here` on that
+**Set up each other Mac once:** update it (see Releases), then **s** so xmrig starts with the LAN job file.
+`./bin/minerctl.sh fleet here` on that
 Mac checks the bind, the token, the LAN address and the macOS firewall. If the firewall is on, click Allow when macOS
 asks about xmrig, or run the `socketfilterfw --unblockapp` line `fleet here` prints.
 
@@ -195,9 +197,9 @@ answer: asleep, off, away), `no token` (its `fleet.token` differs), `idle` (the 
 - Another network: put the Macs on Tailscale (or ZeroTier) and list their names in `fleet.local`, one `host[:port]` per
   line. Do not port-forward 18088 to the internet.
 - Keep one Mac off the LAN: `LAN=off` in its `machine.local` (API back on 127.0.0.1; the pool still shows it).
-- `fleet.token` is tracked in git on purpose (private repo) so every Mac shares it with a `git pull`. It only unlocks
-  read-only stats. To rotate it: replace the line, commit, pull on every Mac, **t** and **s** on each. Rotate it if the
-  repo ever goes public.
+- `fleet.token` is tracked in git on purpose (private repo) so every Mac gets it with a release. It only unlocks
+  read-only stats. To rotate it: replace the line, `./bin/minerctl.sh release`, then reopen XMR Miner on every Mac
+  and press **s**. Rotate it if the repo ever goes public.
 - Because it is xmrig's own API, XMRig dashboards and monitors that take a URL plus an access token work as well.
 
 ## Other Macs / re-install
@@ -213,14 +215,40 @@ It signs the binary, strips quarantine, writes the job file for that Mac and bui
 The job file is re-rendered at every start anyway, so a folder copied from another Mac corrects its own paths,
 thread count and worker name the first time you press `s`. On this M4 confirm Threads: 10.
 
-## Updating
+## Releases (the main Mac updates the others)
 
-On a Mac that cloned the repo, `./bin/minerctl.sh update` brings it up to the latest `main`:
-it fetches, lists the incoming commits, stops xmrig if it is running (writing the usual Desktop summary),
-fast-forwards, runs `./install.sh --yes` (job file, dock app, signature check), then starts xmrig again if it
-was running. `bin/miner.applescript` and `XMR Miner.app` always differ from git because install bakes this folder's
-path into them; update resets and rebuilds them. Any other local edit stops the update until you commit or stash it.
-A folder copied from a zip is not a checkout: clone the repo instead (or `git init` it with `origin` set to the repo).
+One Mac is the **main Mac** (this M4); the others are **followers**. Changes are made on the main Mac only, then:
+
+```bash
+./bin/minerctl.sh release "what changed"
+```
+
+It lists what goes out (uncommitted files, and commits the followers do not have yet), runs the checks every follower
+depends on (each script parses, the UI and fleet self-tests pass), asks once (`--yes` skips that), commits everything,
+and pushes `main` and the `stable` branch to GitHub in one atomic push. `stable` is the release: a push to `main`
+alone reaches no one.
+
+On a follower, **quit XMR Miner and open it again**. Before the UI appears it asks GitHub for `stable` (15 s at most;
+offline, it opens the version it has and the UI's first line says so). When there is a new release it:
+
+- stops xmrig if it is mining (with the usual Desktop summary) and **leaves it stopped**: press `s` to mine again;
+- becomes exactly the release (local branch `stable`). Edits made on that Mac are saved with `git stash`, and its own
+  commits as a `backup/<date>` branch, then dropped;
+- runs `./install.sh --yes` (job file, dock app, signature check), and the UI's first line says what came in.
+
+`machine.local`, `logs/` and the job file belong to each Mac and are never touched. A follower cannot push: its
+`origin` push URL is disabled, so every change goes through the main Mac. `./bin/minerctl.sh update` does the same
+from Terminal without reopening.
+
+The role lives in each checkout's git config (`miner.role`), so `config reset` never changes it; unset means follower.
+`./bin/minerctl.sh role` shows it, `role main` / `role follower` change it. Keep one main Mac. On the main Mac,
+opening the app never updates it, and `update` fast-forwards `main` from GitHub and restarts xmrig if it was running.
+
+**A follower whose code predates releases** needs it once: quit the UI, run `./bin/minerctl.sh update` in its folder
+(if it answers "Local edits would be overwritten", `git stash` first), then open XMR Miner again. After that, quit and
+reopen is all it takes. `bin/miner.applescript` and `XMR Miner.app` always differ from git on a follower because
+install bakes the folder's path into them; updates reset and rebuild them. A folder copied from a zip is not a
+checkout: clone the repo instead (or `git init` it with `origin` set to the repo).
 
 ## Rules
 

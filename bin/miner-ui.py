@@ -36,6 +36,7 @@ API = "http://127.0.0.1:18088/2/summary"
 API_BACKENDS = "http://127.0.0.1:18088/2/backends"
 PEAK_HS = 4204.0
 SNAP = os.path.join(ROOT, "logs", "last-session.json")
+NOTICE = os.path.join(ROOT, "logs", "update-notice.json")  # left by `minerctl update` for the next window
 DATASET_S = 7.0  # RandomX fast-mode dataset init on this M4 (xmrig: "dataset ready (6620 ms)")
 
 # ---- palette: xterm-256, Codex CLI lineage — your terminal's ink, one cyan, green for credits
@@ -399,6 +400,42 @@ def load_snapshot() -> Optional[dict]:
             return json.load(f)
     except Exception:
         return None
+
+
+def take_update_notice(path: str = NOTICE) -> Optional[dict]:
+    """The note the last `minerctl update` left, once: reading it deletes it."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            n = json.load(f)
+    except Exception:
+        return None
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return n if isinstance(n, dict) else None
+
+
+def update_event(n: dict) -> Optional[tuple]:
+    """(kind, fields) for the ledger: the release that came in, or why the check failed."""
+    if n.get("status") == "fail":
+        return "warn", {"title": "Could not check for an update",
+                        "sub": f"{n.get('reason') or 'git fetch failed'} · still on {n.get('at') or '?'}"}
+    if n.get("status") != "ok":
+        return None
+    cnt = int(n.get("count") or 0)
+    lines = [f"{BOLD}Updated{NOBOLD} to release {n.get('to') or '?'}"
+             + (f"{SEC} · {cnt} new commit{'' if cnt == 1 else 's'}{INK}" if cnt else "")]
+    lines += [f"{SEC}{s}{INK}" for s in (n.get("commits") or [])[:3]]
+    if cnt > 3:
+        lines.append(f"{SEC}+{cnt - 3} more{INK}")
+    if n.get("was_up"):
+        lines.append(f"{WARN}mining stopped for the update · s starts it again{INK}")
+    if n.get("saved"):
+        lines.append(f"{SEC}saved first: {n['saved']}{INK}")
+    if n.get("install_ok") is False:
+        lines.append(f"{WARN}install.sh failed: run ./install.sh in this folder{INK}")
+    return "out", {"lines": lines}
 
 
 def latest_summary_path() -> Optional[str]:
@@ -1036,6 +1073,10 @@ class App:
                 p = latest_summary_path()
                 if p:
                     self.add("summary", ts=now, path=p)
+        note = None if self.dump else take_update_notice()
+        ev = update_event(note) if note else None
+        if ev:
+            self.add(ev[0], ts=now, **ev[1])
         self.prev_state = state
 
     def track(self, live: dict, now: float) -> None:
@@ -2324,7 +2365,7 @@ def _demo_fleet() -> tuple:
         dict(base, worker="minerv3-m2-8gb", here=False, host="192.0.2.23", via="lan", state="mining", hs=3237.1,
              hs15=3190.0, acc=812, rej=0, up=18120, pool_hs=3237.1, lts=now - 4),
         dict(base, worker="minerv3-i7-6700hq-16gb", here=False, via="pool", state="pool", hs=None, pool_hs=687.2,
-             lts=now - 16, note="not found on this LAN yet: update it (git pull, then t and s)"),
+             lts=now - 16, note="not found on this LAN yet: update it (reopen XMR Miner there, then s)"),
     ]
     meta = {"total": 4178.4 + 3237.1 + 687.2, "mining": 3, "macs": 3, "pool": "ok", "pool_at": now - 40,
             "pool_total": 7936.3, "scan_at": now - 180, "token": True, "at": now}
@@ -2596,6 +2637,22 @@ def self_test() -> int:
     check("logs tail", "• Ran tail -n 20 logs/xmrig.log" in logs)
     confirm = dump_frame("confirm", strip=True)
     check("confirm band", "› yes" in confirm and "Offline sweep" in confirm and "esc cancel" in confirm)
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "update-notice.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"status": "ok", "to": "abc1234", "count": 5, "commits": ["One", "Two", "Three"],
+                       "was_up": True, "saved": "", "install_ok": True}, f)
+        n = take_update_notice(p)
+        check("update notice is read once", n is not None and n["to"] == "abc1234" and not os.path.exists(p)
+              and take_update_notice(p) is None)
+    kind, kw = update_event(n or {})
+    au = demo_app("home-stopped", 147, 58)
+    au.add(kind, **kw)
+    upd = "\n".join(plain(x) for x in au.compose(au.live()))
+    check("update notice in the ledger", "Updated to release abc1234 · 5 new commits" in upd and "+2 more" in upd
+          and "mining stopped for the update" in upd)
+    fk, fkw = update_event({"status": "fail", "reason": "GitHub did not answer in 15 s", "at": "d6712f2"})
+    check("update check failure is a warn", fk == "warn" and "still on d6712f2" in fkw["sub"])
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
     return 0 if fails == 0 else 1
 

@@ -25,3 +25,7 @@ XMR-Miner-Portable.zip
 fleet.local
 logs/fleet.json
 logs/fleet.json.tmp
+
+# minerctl update: what the last update did, shown once by the UI's next window
+logs/update-notice.json
+logs/update-notice.json.tmp

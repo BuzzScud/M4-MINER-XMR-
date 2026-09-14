@@ -147,7 +147,7 @@ chip_slug() {
 }
 
 # Sets: ARCH CHIP CORES PHYS PCORE ECORE RAMGB L3 CORES_LABEL THREADS AUTO_THREADS THREADS_SPEC
-#       MODE MODE_SPEC RXINIT WORKER POOL TLS YIELD LAN
+#       MODE MODE_SPEC RXINIT WORKER POOL TLS YIELD LAN ROLE
 machine_detect() {
   local root="$1"
   ARCH=$(uname -m)
@@ -212,7 +212,18 @@ machine_detect() {
       esac
     done < "$f"
   fi
+  read_role "$root"
   return 0
+}
+
+# Sets ROLE: main (releases go out from this Mac) or follower (the default: opening the app makes
+# it the latest release). Kept in this checkout's git config (miner.role), not machine.local, so
+# `minerctl config reset` can never turn the main Mac into a follower. No .git = follower, and
+# git is not run at all (on a Mac without the developer tools it would pop up an installer).
+read_role() {
+  ROLE=""
+  [[ -e "$1/.git" ]] && ROLE=$(git -C "$1" config --get miner.role 2>/dev/null)
+  [[ "$ROLE" == main ]] || ROLE=follower
 }
 
 # Sets WALLET from $XMR_WALLET or wallet.local. Prints the fix and returns 1 when missing.
@@ -354,6 +365,11 @@ machine_print() {
     echo "  API:     127.0.0.1:18088 (LAN=off in machine.local)"
   else
     echo "  API:     127.0.0.1:18088 (no fleet.token)"
+  fi
+  if [[ "${ROLE:-follower}" == main ]]; then
+    echo "  Role:    main (releases go out from here: ./bin/minerctl.sh release)"
+  else
+    echo "  Role:    follower (opening XMR Miner makes it the latest release)"
   fi
 }
 
