@@ -38,6 +38,9 @@ WALLET_FILE = os.path.join(ROOT, "wallet.local")
 PLIST = os.path.join(ROOT, "com.minerv3.xmrig.plist")
 CACHE = os.path.join(ROOT, "logs", "fleet.json")
 POOL_API = "https://api.moneroocean.stream/miner/{wallet}/stats/allWorkers"
+STATS_API = "https://api.moneroocean.stream/miner/{wallet}/stats"  # amtDue / amtPaid for the wallet
+USER_API = "https://api.moneroocean.stream/user/{wallet}"          # payout_threshold
+PICO = 1e12  # atomic units per XMR
 
 LAN_EVERY = 5.0      # s between LAN polls in the watcher
 POOL_EVERY = 60.0    # the pool's numbers move about once a minute
@@ -232,6 +235,25 @@ def pool_workers(wallet: str, timeout: float = 6.0):
     return out, "ok"
 
 
+def parse_balance(stats: dict, user: Optional[dict]) -> dict:
+    """XMR owed and paid from /miner/<wallet>/stats, plus the payout threshold from /user/<wallet>."""
+    thr = (user or {}).get("payout_threshold")
+    return {"due": float(stats.get("amtDue") or 0) / PICO, "paid": float(stats.get("amtPaid") or 0) / PICO,
+            "txns": int(stats.get("txnCount") or 0),
+            "threshold": float(thr) / PICO if isinstance(thr, (int, float)) and thr > 0 else None}
+
+
+def pool_balance(wallet: str, timeout: float = 6.0):
+    """({due, paid, txns, threshold}, status). The threshold is optional; the balance is not."""
+    if not wallet:
+        return None, "no wallet"
+    d, st = http_json(STATS_API.format(wallet=wallet), "", timeout)
+    if st != "ok" or not isinstance(d, dict):
+        return None, st
+    u, ust = http_json(USER_API.format(wallet=wallet), "", timeout)
+    return parse_balance(d, u if ust == "ok" and isinstance(u, dict) else None), "ok"
+
+
 # ---------------------------------------------------------------------- scan
 def own_ipv4() -> Optional[tuple[str, int]]:
     """(address, prefix) of the interface that holds the default route; None when offline."""
@@ -314,6 +336,7 @@ class Fleet:
         self.pool: dict = {}
         self.pool_status = "not yet"
         self.pool_at = 0.0
+        self.balance: Optional[dict] = None
         self.scan_at = float(self.cache.get("scanned") or 0)
         self.last_scan: list = []
         self.lock = threading.Lock()
@@ -357,10 +380,13 @@ class Fleet:
         if not force and time.time() - self.pool_at < POOL_EVERY:
             return
         d, st = pool_workers(self.wallet)
+        bal, bst = pool_balance(self.wallet)
         with self.lock:
             self.pool_at, self.pool_status = time.time(), st
             if st == "ok":
                 self.pool = d
+            if bst == "ok":
+                self.balance = bal
 
     def want_scan(self) -> bool:
         if not self.token or time.time() - self.scan_at < SCAN_EVERY:
@@ -398,7 +424,7 @@ class Fleet:
         for r in lan:
             here = r["host"] == LOCAL
             b = r.get("brief")
-            base = {"here": here, "host": r["host"], "via": "lan", "pool_hs": None, "lts": None,
+            base = {"here": here, "host": r["host"], "via": "lan", "pool_hs": None, "lts": None, "pool_acc": None,
                     "hs": None, "hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "note": ""}
             if b:
                 w = self.me if (here and self.me) else (b["worker"] or r["host"])
@@ -428,14 +454,14 @@ class Fleet:
                 why = {"stopped": "its API is local-only: update it (reopen XMR Miner there, then s)",
                        "no token": row["note"]}.get(row["state"], "mining, but not reachable from here")
                 row.update(state="pool", note=why)
-            row["pool_hs"], row["lts"] = p["hs"], p["lts"]
+            row["pool_hs"], row["lts"], row["pool_acc"] = p["hs"], p["lts"], p.get("valid")
         return sorted(rows.values(), key=lambda r: (not r["here"], -eff_hs(r), r["worker"]))
 
     def meta(self, rows: list[dict]) -> dict:
         active = [r for r in rows if r["state"] in ACTIVE]
         return {"total": sum(eff_hs(r) for r in active), "mining": len(active), "macs": len(rows),
                 "pool": self.pool_status, "pool_at": self.pool_at,
-                "pool_total": sum(p["hs"] for p in self.pool.values()),
+                "pool_total": sum(p["hs"] for p in self.pool.values()), "balance": self.balance,
                 "scan_at": self.scan_at, "token": bool(self.token), "at": time.time()}
 
 
@@ -620,6 +646,10 @@ def self_test() -> int:
     check("this Mac stopped", r4["state"] == "stopped" and r4["note"] == "not mining" and r4["here"])
     t = table(f.rows(now), f.meta(f.rows(now)))
     check("table", t[0].startswith("Fleet · ") and any("minerv3-i7-6700hq-16gb" in ln for ln in t) and "\033" not in "".join(t))
+    check("rows: pool share count", by["minerv3-m4-16gb"]["pool_acc"] is None and by["old-rig"]["pool_acc"] is None)
+    bal = parse_balance({"amtDue": 1715517028, "amtPaid": 0, "txnCount": 0}, {"payout_threshold": 300000000000})
+    check("balance", abs(bal["due"] - 0.001715517028) < 1e-12 and bal["paid"] == 0 and bal["threshold"] == 0.3)
+    check("balance without threshold", parse_balance({"amtDue": 5}, None)["threshold"] is None)
     check("age", age(now - 30, now) == "30s" and age(now - 600, now) == "10m" and age(None) == "—")
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
     return 0 if fails == 0 else 1

@@ -27,6 +27,15 @@ from typing import Optional
 import fleet  # bin/fleet.py: the API token, and every Mac at once
 
 ROOT = os.environ.get("MINER_ROOT") or os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def is_main_mac() -> bool:
+    """git config miner.role == main: the Mac that sends releases (minerctl role). Unset = follower."""
+    try:
+        out = subprocess.run(["git", "-C", ROOT, "config", "--get", "miner.role"], capture_output=True, text=True, timeout=2)
+        return out.stdout.strip() == "main"
+    except Exception:
+        return False
 CTL = os.path.join(ROOT, "bin", "minerctl.sh")
 LOG = os.path.join(ROOT, "logs", "xmrig.log")
 ERR = os.path.join(ROOT, "logs", "xmrig.err.log")
@@ -795,6 +804,7 @@ class App:
     perf_at: float = 0.0
     env_cache: Optional[tuple] = None    # (ts, machine_env())
     env_fixed: Optional[dict] = None     # canned machine_env() for --dump and the self-test
+    main: bool = field(default_factory=is_main_mac)  # main Mac: rail adds the wallet balance + per-Mac shares
     ctl_note: str = ""                   # the last settings change, shown on the /config card
 
     # ------------------------------------------------------------------ plumbing
@@ -1227,6 +1237,22 @@ class App:
         R.append(host or pool)
         fails = conn.get("failures")
         R.append(f"{SEC}:{port or '—'} · {tls_label(conn, job)} · {fmt_ping(conn.get('ping')) if run else '—'} · {fails if fails is not None else '—'} failure{'' if str(fails) == '1' else 's'}{INK}")
+        fs = self.fleet_latest()
+        # balance: what the pool owes this wallet (main Mac only)
+        if self.main:
+            R.append("")
+            bal = (fs[1].get("balance") if fs else None) or None
+            R.append(lab("balance", f"{fleet.age(fs[1].get('pool_at'))} ago" if bal else ""))
+            if bal:
+                R.append(f"{BOLD}{bal['due']:.6f} XMR{NOBOLD}{SEC} due{INK}")
+                thr = bal.get("threshold")
+                if thr:
+                    R.append(f"{bar(bal['due'] / thr, 16)} {SEC}{bal['due'] / thr * 100:.1f}% to payout{INK}")
+                paid = f"{bal['paid']:.4f} paid" if bal["paid"] else "0 paid"
+                R.append(f"{SEC}{f'payout at {thr:g} XMR · ' if thr else ''}{paid}{INK}")
+            else:
+                R.append(f"{SEC}—{INK}")
+                R.append(f"{FAINT}asking the pool…{INK}")
         # dataset
         R.append("")
         ds_state = "released" if state == "STOPPED" else ("2.0 GB" if run else "building")
@@ -1256,13 +1282,14 @@ class App:
         else:
             R.append(f"{SEC}nothing yet{INK}")
         # fleet: every Mac on this wallet (bin/fleet.py). Last, so it is the first to go when short.
-        fs = self.fleet_latest()
         R.append("")
         if fs:
             frows, fmeta = fs
             R.append(lab("fleet", f"{fmeta.get('mining', 0)} of {fmeta.get('macs', 0)} · {fmt_hs(fmeta.get('total'))}"))
             for fr in frows[:4]:
                 R.append(fit_row(*self.fleet_cells(fr), W))
+                if self.main:
+                    R.append(self.fleet_shares(fr))
             if len(frows) > 4:
                 R.append(f"{FAINT}+{len(frows) - 4} more · /fleet{INK}")
         else:
@@ -1288,6 +1315,13 @@ class App:
         via = "here" if r["here"] else ("LAN" if r["via"] == "lan" else "pool")
         return (f"{col}{fleet.MARK.get(st, '?')}{INK} {trunc(name, 15)}",
                 f"{INK if st in fleet.ACTIVE else SEC}{right}{FAINT} {via:>4}{INK}")
+
+    def fleet_shares(self, r: dict) -> str:
+        """Under a Mac's rail row: shares the pool has from that worker, and this run's count when the LAN has it."""
+        pool = f"{GOOD}{fmt_n(r['pool_acc'])} ✓{SEC} pool" if r.get("pool_acc") is not None else f"{SEC}— pool"
+        run = f"{FAINT} · {SEC}{fmt_n(r['acc'])} this run" if r.get("acc") is not None else ""
+        rej = f"{FAINT} · {BAD}{r['rej']} ✗" if r.get("rej") else ""
+        return f"{FAINT} └ {pool}{run}{rej}{INK}"
 
     def now_row(self, live: dict, label: str = "now:     ") -> str:
         """The live line of the job card: what is happening right now, in one glance."""
@@ -2358,17 +2392,18 @@ def _demo_live(state: str = "RUNNING") -> dict:
 
 def _demo_fleet() -> tuple:
     now = time.time()
-    base = {"hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "note": "", "host": ""}
+    base = {"hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "note": "", "host": "", "pool_acc": None}
     rows = [
         dict(base, worker="minerv3-m4-16gb", here=True, host="127.0.0.1", via="lan", state="mining", hs=4178.4,
-             hs15=4166.1, acc=1945, rej=0, up=58080, pool_hs=4012.0, lts=now - 12),
+             hs15=4166.1, acc=1945, rej=0, up=58080, pool_hs=4012.0, lts=now - 12, pool_acc=4081),
         dict(base, worker="minerv3-m2-8gb", here=False, host="192.0.2.23", via="lan", state="mining", hs=3237.1,
-             hs15=3190.0, acc=812, rej=0, up=18120, pool_hs=3237.1, lts=now - 4),
+             hs15=3190.0, acc=812, rej=0, up=18120, pool_hs=3237.1, lts=now - 4, pool_acc=19695),
         dict(base, worker="minerv3-i7-6700hq-16gb", here=False, via="pool", state="pool", hs=None, pool_hs=687.2,
-             lts=now - 16, note="not found on this LAN yet: update it (reopen XMR Miner there, then s)"),
+             lts=now - 16, pool_acc=395, note="not found on this LAN yet: update it (reopen XMR Miner there, then s)"),
     ]
     meta = {"total": 4178.4 + 3237.1 + 687.2, "mining": 3, "macs": 3, "pool": "ok", "pool_at": now - 40,
-            "pool_total": 7936.3, "scan_at": now - 180, "token": True, "at": now}
+            "pool_total": 7936.3, "scan_at": now - 180, "token": True, "at": now,
+            "balance": {"due": 0.001715517028, "paid": 0.0, "txns": 0, "threshold": 0.3}}
     return rows, meta
 
 
@@ -2383,6 +2418,7 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
     live = _demo_live("STOPPED" if stopped else "STARTING" if starting else "RUNNING")
     app.fixed_live = live
     app.fleet_fixed = _demo_fleet()
+    app.main = True
     app.env_fixed = {"ARCH": "arm64", "CORES": "10", "AUTO_THREADS": "10", "THREADS": "10", "THREADS_SPEC": "auto",
                      "MODE": "fast", "MODE_SPEC": "auto", "WORKER": "minerv3-m4-16gb",
                      "POOL": "gulf.moneroocean.stream:20016", "TLS": "on", "YIELD": "off", "LAN": "on"}
@@ -2536,7 +2572,9 @@ def self_test() -> int:
     check("compact card is 3 rows", small.startswith("╭─ >_ XMR Miner · rx/0 fast · 10 threads · gulf.moneroocean.stream ─") and "─╮" in small.split("\n")[0] and small.split("\n")[1].startswith("│ now:  4,178 H/s") and "…" not in small.split("\n")[1] and small.split("\n")[2].startswith("╰"))
     check("stopped now row (folded layout)", "now:     not mining" in dump_frame("home-stopped", 90, 36, strip=True))
     rail = dump_frame("home", 110, 36, strip=True).split("\n")
-    check("rail present at 110 cols", any("│  hashrate" in ln for ln in rail) and any("│  shares" in ln for ln in rail) and any("│  threads" in ln for ln in rail) and any("│  pool" in ln for ln in rail) and any("│  dataset" in ln for ln in rail) and any("│  session" in ln for ln in rail))
+    check("rail present at 110 cols", any("│  hashrate" in ln for ln in rail) and any("│  shares" in ln for ln in rail) and any("│  threads" in ln for ln in rail) and any("│  pool" in ln for ln in rail) and any("│  balance" in ln for ln in rail) and any("│  dataset" in ln for ln in rail))
+    app_f110 = demo_app("home", 110, 36); app_f110.main = False
+    check("follower rail at 110 cols keeps session", any("│  session" in ln for ln in (plain(x) for x in app_f110.compose(app_f110.live()))))
     check("rail sparkline + windows", any(ch in "".join(rail) for ch in "⣿⣶⣤⣀") and any("10s 4,178 · 60s 4,062 · 15m 4,166" in ln for ln in rail))
     check("rail hides the now row", not any("now:" in ln for ln in rail) and any("99% of peak" in ln for ln in rail))
     check("rail folds below 100 cols", not any("│  hashrate" in ln for ln in dump_frame("home", 99, 36, strip=True).split("\n")) and "now:" in dump_frame("home", 99, 36, strip=True))
@@ -2631,6 +2669,15 @@ def self_test() -> int:
     tall = dump_frame("home", 147, 58, strip=True).split("\n")
     check("rail fleet section at 147x58", any("│  fleet" in ln and "3 of 3 · 8,103 H/s" in ln for ln in tall)
           and any("m2-8gb" in ln and "3,237 H/s  LAN" in ln for ln in tall) and any("i7-6700hq-16gb" in ln and "pool" in ln for ln in tall))
+    check("rail balance under pool (main Mac)", any("│  balance" in ln for ln in tall) and any("0.001716 XMR due" in ln for ln in tall)
+          and any("] 0.6% to payout" in ln for ln in tall) and any("payout at 0.3 XMR · 0 paid" in ln for ln in tall)
+          and next(i for i, ln in enumerate(tall) if "│  pool" in ln) < next(i for i, ln in enumerate(tall) if "│  balance" in ln))
+    check("rail fleet shares (main Mac)", any("└ 19,695 ✓ pool · 812 this run" in ln for ln in tall)
+          and any("└ 395 ✓ pool" in ln for ln in tall) and any("└ 4,081 ✓ pool · 1,945 this run" in ln for ln in tall))
+    app_fw = demo_app("home", 147, 58); app_fw.main = False
+    fw = [plain(x) for x in app_fw.compose(app_fw.live())]
+    check("follower rail: no balance, no share lines", not any("balance" in ln or "✓ pool" in ln for ln in fw)
+          and any("│  fleet" in ln for ln in fw))
     app_nf = demo_app("home", 147, 58); app_nf.fleet_fixed = None
     check("rail fleet before the first poll", any("│  fleet" in ln and "looking…" in ln for ln in (plain(x) for x in app_nf.compose(app_nf.live()))))
     logs = dump_frame("logs", strip=True)
