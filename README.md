@@ -48,8 +48,9 @@ RandomX lab page: `lab/RandomX-formula-lab.html` (the real one; the original ske
 - 8 GB or more: `--randomx-mode=fast` (2 GB dataset). Under 8 GB: `light` (256 MB).
 - Worker: `minerv3-<chip>-<ram>gb`: `minerv3-m4-16gb`, `minerv3-m2-8gb`, `minerv3-i7-8700b-16gb`.
 - Binary: `bin/xmrig` is universal (XMRig 6.26.0, arm64 + x86_64); the kernel runs the native slice. The arm64 slice is
-  the build that beat a Clang 17 `-mcpu=native` rebuild on the M4 (4,204 vs 3,874 H/s); the x86_64 slice is the
-  official release (checksum verified).
+  the build that beat a Clang 17 `-mcpu=native` rebuild on the M4 (4,204 vs 3,874 H/s); the x86_64 slice is built
+  from the 6.26.0 source with the donate minimum set to 0 (the official Intel release forces at least 1%, which ignored
+  `--donate-level=0`). Rebuild it with `docs/setup/build-xmrig-x86_64.sh`.
 - Overrides: `machine.local`, one `KEY=value` per line. Do not edit the plist by hand; start re-renders it.
   `minerctl perf` / `minerctl config` and the `/config` card write it for you (see Performance and settings).
 - `-a rx/0` on every Mac.
