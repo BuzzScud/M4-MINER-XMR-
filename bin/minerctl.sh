@@ -1,9 +1,10 @@
 #!/bin/zsh
 # Control helper. Starts xmrig from this process (not launchd).
 # launchd cannot run binaries under Desktop (TCC hang: 0% CPU, empty logs).
-# Subcommands: status | start | stop | kill | nice | job | fleet [...]
+# Subcommands: status | start | stop | kill | nice | job | fleet [...] | update
 # The job file is rendered for THIS Mac at every start (bin/machine.sh).
 # fleet: every Mac's miner at once (bin/fleet.py; `fleet here` checks this Mac).
+# update: git pull from GitHub, redo this Mac's setup, restart xmrig if it was running.
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -168,6 +169,47 @@ print(f"Pool: {pool}")
     # Every Mac at once: LAN API (token) + the pool's per-worker view. Read-only.
     shift
     exec python3 "$ROOT/bin/fleet.py" "$@"
+    ;;
+
+  update)
+    # install.sh rewrites these for this folder's path, so they always differ from git.
+    # They are reset before the pull and rebuilt after it; any other local edit stops the update.
+    generated=(bin/miner.applescript "XMR Miner.app" bin/xmrig)
+    G=(git -C "$ROOT")
+    if ! "${G[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "ERROR: $ROOT is not a git checkout."
+      echo "Clone https://github.com/BuzzScud/M4-MINER-XMR-.git and run ./install.sh there."
+      exit 1
+    fi
+    "${G[@]}" fetch --quiet || { echo "ERROR: git fetch failed (network?)."; exit 1; }
+    incoming=$("${G[@]}" log --oneline 'HEAD..@{u}')
+    if [[ -z $incoming ]]; then
+      echo "Already up to date: $("${G[@]}" log -1 --format='%h %s')"
+      exit 0
+    fi
+    edits=$("${G[@]}" status --porcelain --untracked-files=no -- . "${generated[@]/#/:!}")
+    if [[ -n $edits ]]; then
+      echo "Local edits would be overwritten:"
+      echo "$edits"
+      echo "Commit or stash them (git -C \"$ROOT\" stash), then update again."
+      exit 1
+    fi
+    echo "Updating:"
+    echo "$incoming"
+    was_up=0
+    if is_up; then
+      was_up=1
+      "$ROOT/bin/minerctl.sh" stop || exit 1
+    fi
+    "${G[@]}" checkout -- "${generated[@]}"
+    if ! "${G[@]}" merge --ff-only --quiet '@{u}'; then
+      echo "ERROR: cannot fast-forward (local commits?). Resolve with git, then run ./install.sh."
+      exit 1
+    fi
+    "$ROOT/install.sh" --yes || exit 1
+    if (( was_up )); then
+      exec "$ROOT/bin/minerctl.sh" start
+    fi
     ;;
 
   start)

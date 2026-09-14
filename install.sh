@@ -6,10 +6,13 @@
 # decides threads, mode and worker from the chip, cores, cache and RAM) and
 # builds XMR Miner.app here. Run it once per Mac.
 # Nothing autostarts. Nothing is loaded until you start it.
+# --yes skips the prompt (bin/minerctl.sh update runs it that way after a pull).
 # =============================================================================
 set -uo pipefail
 
 DEST="${0:A:h}"
+YES=0
+[[ "${1:-}" == --yes || "${1:-}" == -y ]] && YES=1
 LOGS="$DEST/logs"
 source "$DEST/bin/machine.sh"
 
@@ -48,15 +51,23 @@ echo "  Pool:    $POOL"
 echo "  Wallet:  ${WALLET:0:12}...${WALLET: -6}"
 [[ -f "$DEST/machine.local" ]] && echo "  Overrides: machine.local"
 echo
-printf "Proceed? [y/N] "
-read -r ans
-[[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "Cancelled."; exit 0; }
+if (( ! YES )); then
+  printf "Proceed? [y/N] "
+  read -r ans
+  [[ "$ans" == "y" || "$ans" == "Y" ]] || { echo "Cancelled."; exit 0; }
+fi
 
 mkdir -p "$DEST/bin" "$LOGS"
 chmod +x "$DEST/bin/xmrig" "$DEST/bin/machine.sh" "$DEST/bin/minerctl.sh" "$DEST/bin/xmr_bench_sweep.sh" "$DEST/bin/miner-ui.sh" "$DEST/bin/miner-ui.py" 2>/dev/null
 
 xattr -dr com.apple.quarantine "$DEST/bin/xmrig" 2>/dev/null
-codesign --force --sign - "$DEST/bin/xmrig" >/dev/null 2>&1 && echo "  signed xmrig"
+# Re-sign only when the signature is broken: bin/xmrig is tracked, and re-signing a good one
+# changes its bytes, which would block the next `git pull`.
+if codesign -v "$DEST/bin/xmrig" >/dev/null 2>&1; then
+  echo "  xmrig signature ok"
+else
+  codesign --force --sign - "$DEST/bin/xmrig" >/dev/null 2>&1 && echo "  signed xmrig"
+fi
 
 if write_job_file "$DEST" >/dev/null; then
   echo "  plist written and valid"

@@ -69,6 +69,7 @@ cd "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"
 ./bin/minerctl.sh fleet    # every Mac on this wallet (add --watch, --json, -v for addresses)
 ./bin/minerctl.sh fleet here   # on any Mac: can the others see this one? (bind, token, LAN, firewall)
 ./bin/minerctl.sh fleet scan   # look for miners on this subnet now
+./bin/minerctl.sh update   # git pull from GitHub, re-run install (no prompt), restart xmrig if it was running
 ```
 
 Live stats: `curl -s -H "Authorization: Bearer $(tail -1 fleet.token)" http://127.0.0.1:18088/2/summary | python3 -m json.tool`
@@ -167,6 +168,15 @@ cd "/path/to/XMR MINER"
 It signs the binary, strips quarantine, writes the job file for that Mac and builds the dock app. Starts nothing.
 The job file is re-rendered at every start anyway, so a folder copied from another Mac corrects its own paths,
 thread count and worker name the first time you press `s`. On this M4 confirm Threads: 10.
+
+## Updating
+
+On a Mac that cloned the repo, `./bin/minerctl.sh update` brings it up to the latest `main`:
+it fetches, lists the incoming commits, stops xmrig if it is running (writing the usual Desktop summary),
+fast-forwards, runs `./install.sh --yes` (job file, dock app, signature check), then starts xmrig again if it
+was running. `bin/miner.applescript` and `XMR Miner.app` always differ from git because install bakes this folder's
+path into them; update resets and rebuilds them. Any other local edit stops the update until you commit or stash it.
+A folder copied from a zip is not a checkout: clone the repo instead (or `git init` it with `origin` set to the repo).
 
 ## Rules
 
