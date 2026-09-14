@@ -1,8 +1,12 @@
 #!/bin/zsh
 # Control helper. Starts xmrig from this process (not launchd).
 # launchd cannot run binaries under Desktop (TCC hang: 0% CPU, empty logs).
-# Subcommands: status | start | stop | kill | nice | job | fleet [...] | update
+# Subcommands: status | start | stop | kill | restart | nice | job | perf [...] | config [...]
+#              | bench [...] | fleet [...] | update | help
 # The job file is rendered for THIS Mac at every start (bin/machine.sh).
+# perf / config: change threads and the other machine.local settings; applies now
+#   (restarts xmrig if it is running, without a Desktop summary).
+# bench: offline thread sweep (bin/xmr_bench_sweep.sh); refuses while mining.
 # fleet: every Mac's miner at once (bin/fleet.py; `fleet here` checks this Mac).
 # update: git pull from GitHub, redo this Mac's setup, restart xmrig if it was running.
 set -uo pipefail
@@ -110,6 +114,90 @@ kill_all() {
   rm -f "$PIDFILE"
 }
 
+# Re-render the job file from machine.local and, when xmrig is running on a job that
+# changed, restart it so the setting applies now. A restart is not a stop: no Desktop summary.
+apply_settings() {
+  local problems before after
+  problems=$(local_problems "$ROOT")
+  if [[ -n $problems ]]; then
+    echo "machine.local: these lines are skipped (fix them: ./bin/minerctl.sh config edit):"
+    print -r -- "$problems" | sed 's/^/  /'
+  fi
+  before=$(cat "$PLIST" 2>/dev/null || true)
+  write_job_file "$ROOT" --if-changed || return 1
+  after=$(cat "$PLIST" 2>/dev/null || true)
+  if ! is_up; then
+    echo "Saved. Applies on the next start (s in the UI, or ./bin/minerctl.sh start)."
+    return 0
+  fi
+  if [[ "$before" == "$after" ]]; then
+    echo "No change to the job; xmrig keeps running."
+    return 0
+  fi
+  echo "Restarting xmrig with $THREADS threads, $MODE mode..."
+  kill_all
+  exec "$ROOT/bin/minerctl.sh" start
+}
+
+# Threads, CPU share and live speed for `perf` with no argument.
+perf_print() {
+  local pct=$(( (THREADS * 100 + CORES / 2) / CORES ))
+  local src="auto"
+  [[ "$THREADS_SPEC" != auto ]] && src="THREADS=$THREADS_SPEC"
+  echo "Threads: $THREADS of $CORES logical CPUs  ($src; auto is $AUTO_THREADS)"
+  echo "CPU:     about $pct% of this Mac while mining ($((THREADS * 100))% on xmrig's row in Activity Monitor)"
+  echo "Mode:    $MODE   Yield: $YIELD"
+  if api_up; then
+    api_curl "$API" --max-time 2 | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin); t=d["hashrate"]["total"]
+    v=[x for x in t if x]
+    print(f"Now:     {v[0]:,.0f} H/s (10s)" + (f", {v[-1]:,.0f} H/s longest window" if len(v) > 1 else ""))
+except Exception:
+    pass
+' || true
+  else
+    echo "Now:     not mining"
+  fi
+  if [[ "$ARCH" != arm64 && "$L3" -gt 0 ]] && (( THREADS > AUTO_THREADS )); then
+    echo "Note:    RandomX wants 2 MB of L3 per thread and this CPU has $(( L3 / 1048576 )) MB, so threads above"
+    echo "         $AUTO_THREADS add CPU load faster than H/s (and heat). ./bin/minerctl.sh bench measures it."
+  fi
+  echo
+  echo "Change:  ./bin/minerctl.sh perf up | down | max | eco | auto | <1-$CORES> | <1-100>%"
+}
+
+config_usage() {
+  cat <<EOF
+Usage: ./bin/minerctl.sh config [show]            effective settings + machine.local
+       ./bin/minerctl.sh config set KEY=value ...  e.g. config set THREADS=4 MODE=fast
+       ./bin/minerctl.sh config unset KEY ...      back to the automatic value
+       ./bin/minerctl.sh config edit               open machine.local in \$EDITOR (nano), then apply
+       ./bin/minerctl.sh config apply              re-read machine.local now
+       ./bin/minerctl.sh config reset              delete machine.local (everything auto)
+       ./bin/minerctl.sh config path               print the machine.local path
+Keys:  ${SETTING_KEYS[*]}
+Changes apply at once; a running xmrig restarts (about a minute to full speed).
+EOF
+}
+
+# A commented machine.local for `config edit` when there is none yet.
+local_template() {
+  cat <<EOF
+# machine.local: tuning for this Mac only (gitignored). One KEY=value per line; # starts a comment.
+# Save and quit the editor; the miner applies it (a running xmrig restarts).
+#
+# THREADS=auto   1-$CORES | auto ($AUTO_THREADS here) | max ($CORES) | eco (half of auto) | 75% (of logical CPUs)
+# MODE=auto      fast (2 GB dataset, 8 GB+ RAM) | light (256 MB, much slower) | auto
+# WORKER=$WORKER
+# POOL=$POOL_DEFAULT
+# TLS=on         off only for a pool port without TLS
+# YIELD=off      on: other apps get the CPU first (lower H/s)
+# LAN=on         off: API on 127.0.0.1 only (the fleet view cannot see this Mac)
+EOF
+}
+
 args_from_plist() {
   python3 - "$PLIST" "$ROOT" <<'PY'
 import os, sys, plistlib
@@ -163,6 +251,159 @@ print(f"Pool: {pool}")
     # Render the job file for this Mac (only rewritten when it differs) and show the profile.
     write_job_file "$ROOT" --if-changed || exit 1
     machine_print
+    ;;
+
+  perf|threads)
+    # More or fewer mining threads: the performance knob. Written to machine.local as THREADS=.
+    machine_detect "$ROOT"
+    arg="${2:-}"
+    if [[ -z $arg ]]; then
+      perf_print
+      exit 0
+    fi
+    case "$arg" in
+      up|+|more)
+        if (( THREADS >= CORES )); then echo "Already at the top: $THREADS of $CORES threads."; exit 0; fi
+        spec=$(( THREADS + 1 )) ;;
+      down|-|less)
+        if (( THREADS <= 1 )); then echo "Already at the bottom: 1 thread."; exit 0; fi
+        spec=$(( THREADS - 1 )) ;;
+      *)
+        spec="$arg" ;;
+    esac
+    if ! setting_ok THREADS "$spec"; then
+      echo "Not a thread setting: $arg"
+      echo "Use: perf up | down | max | eco | auto | <1-$CORES> | <1-100>%"
+      exit 1
+    fi
+    old=$THREADS
+    if [[ "$spec" == auto ]]; then
+      local_unset "$ROOT" THREADS
+    else
+      local_set "$ROOT" THREADS "$spec"
+    fi
+    machine_detect "$ROOT"
+    echo "Threads: $old → $THREADS of $CORES  (THREADS=$THREADS_SPEC)"
+    apply_settings
+    ;;
+
+  config)
+    sub="${2:-show}"
+    (( $# >= 2 )) && shift 2 || shift $#
+    case "$sub" in
+      show)
+        machine_detect "$ROOT"
+        machine_print
+        echo
+        if [[ -f "$ROOT/machine.local" ]] && grep -qvE '^[[:space:]]*(#.*)?$' "$ROOT/machine.local"; then
+          echo "machine.local:"
+          grep -vE '^[[:space:]]*(#.*)?$' "$ROOT/machine.local" | sed 's/^/  /'
+        else
+          echo "machine.local: no overrides (every setting is automatic)"
+        fi
+        problems=$(local_problems "$ROOT")
+        if [[ -n $problems ]]; then
+          echo "Skipped (invalid):"
+          print -r -- "$problems" | sed 's/^/  /'
+        fi
+        echo
+        echo "Edit: ./bin/minerctl.sh config set KEY=value | unset KEY | edit | reset   (config help)"
+        ;;
+      set)
+        if (( $# == 0 )); then config_usage; exit 1; fi
+        machine_detect "$ROOT"
+        keys=(); vals=(); bad=0
+        for kv in "$@"; do
+          k="${${kv%%=*}:u}"; v="${kv#*=}"
+          if [[ "$kv" != *=* ]] || (( ! ${SETTING_KEYS[(Ie)$k]} )) || ! setting_ok "$k" "$v"; then
+            echo "Not a valid setting: $kv   (want $(setting_help "$k"))"
+            bad=1
+            continue
+          fi
+          keys+=("$k"); vals+=("$v")
+        done
+        (( bad )) && { echo "Nothing written."; exit 1; }
+        for i in {1..${#keys}}; do
+          local_set "$ROOT" "${keys[$i]}" "${vals[$i]}"
+          echo "Set ${keys[$i]}=${vals[$i]}"
+        done
+        apply_settings
+        ;;
+      unset)
+        if (( $# == 0 )); then config_usage; exit 1; fi
+        for k in "$@"; do
+          k="${k:u}"
+          if (( ! ${SETTING_KEYS[(Ie)$k]} )); then echo "Unknown key: $k  (keys: ${SETTING_KEYS[*]})"; exit 1; fi
+          local_unset "$ROOT" "$k"
+          echo "Unset $k (automatic again)"
+        done
+        apply_settings
+        ;;
+      edit)
+        machine_detect "$ROOT"
+        [[ -f "$ROOT/machine.local" ]] || local_template > "$ROOT/machine.local"
+        editor=(${=${VISUAL:-${EDITOR:-nano}}})
+        "${editor[@]}" "$ROOT/machine.local" || { echo "Editor exited with an error; nothing applied."; exit 1; }
+        [[ "${1:-}" == --no-apply ]] && exit 0  # the UI applies it itself, to follow a restart
+        apply_settings
+        ;;
+      apply)
+        apply_settings
+        ;;
+      reset)
+        if [[ -f "$ROOT/machine.local" ]]; then
+          echo "Removing machine.local:"
+          sed 's/^/  /' "$ROOT/machine.local"
+          rm -f "$ROOT/machine.local"
+        else
+          echo "No machine.local; already automatic."
+        fi
+        apply_settings
+        ;;
+      path)
+        echo "$ROOT/machine.local"
+        ;;
+      help|-h|--help)
+        config_usage
+        ;;
+      *)
+        echo "Unknown: config $sub"
+        config_usage
+        exit 1
+        ;;
+    esac
+    ;;
+
+  restart)
+    if ! is_up; then echo "Not running."; exit 1; fi
+    kill_all
+    exec "$ROOT/bin/minerctl.sh" start
+    ;;
+
+  bench)
+    # Offline thread sweep: mines nothing, needs every core, so it will not run beside the miner.
+    shift
+    if is_up; then
+      echo "The miner is running. Stop it first (./bin/minerctl.sh stop), then bench again."
+      exit 1
+    fi
+    exec "$ROOT/bin/xmr_bench_sweep.sh" "$@"
+    ;;
+
+  help|-h|--help)
+    cat <<EOF
+Usage: ./bin/minerctl.sh <command>
+  status             running or not, speed, shares
+  start | stop       mine / stop (stop writes a Desktop summary)
+  restart            stop + start, no summary
+  perf [how]         threads: up | down | max | eco | auto | <N> | <N>%   (no argument: show)
+  config [...]       show or edit this Mac's settings (config help)
+  bench [N ...]      offline thread sweep to find the best thread count (miner must be stopped)
+  job                render the job file and print this Mac's profile
+  nice               try nice -10 on xmrig
+  fleet [...]        every Mac on this wallet
+  update             git pull, reinstall, restart if it was running
+EOF
     ;;
 
   fleet)
@@ -286,6 +527,11 @@ except Exception:
       exit 1
     fi
     echo "Stopped."
+    ;;
+
+  *)
+    echo "Unknown command: $1   (./bin/minerctl.sh help)"
+    exit 1
     ;;
 
 esac

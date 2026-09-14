@@ -71,4 +71,7 @@ done
 
 echo
 printf "  best: %s threads at %.1f H/s\n" "$BEST_T" "$BEST_H"
+if (( BEST_T > 0 )); then
+  echo "  use it: ./bin/minerctl.sh perf $BEST_T     (or + / - in the UI; now: $THREADS threads)"
+fi
 echo

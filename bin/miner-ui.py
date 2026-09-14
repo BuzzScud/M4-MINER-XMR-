@@ -86,7 +86,7 @@ class Cmd:
 COMMANDS = (
     Cmd("/usage", "Status, speed, shares, pool", "usage", "miner"),
     Cmd("/fleet", "Every Mac: LAN API + pool", "fleet", "miner"),
-    Cmd("/config","Threads, mode, pool, worker", "config", "miner"),
+    Cmd("/config","Threads (+/−), mode, pool, worker", "config", "miner"),
     Cmd("/logs", "Last 20 lines of xmrig.log", "logs", "miner"),
     Cmd("/err", "Last 20 lines of the error log", "err", "miner"),
     Cmd("/open", "Open this folder in Finder", "open", "actions"),
@@ -103,6 +103,12 @@ ALIASES = {
     "/stats": "usage",
     "/status": "usage",
     "/plist": "config",
+    "/perf": "config",
+    "/threads": "config",
+    "/performance": "config",
+    "/settings": "config",
+    "/set": "config",
+    "/unset": "config",
     "/error": "err",
     "/refresh": "usage",
     "/macs": "fleet",
@@ -118,6 +124,8 @@ ALIASES = {
 }
 
 TABS = ("Usage", "Fleet", "Config", "Logs")
+TYPED = ("/perf", "/threads", "/set", "/unset")  # take arguments: /perf 4, /set MODE=light
+PERF_DELAY = 1.5  # + / − while mining: presses gather this long, then one restart applies them
 
 
 _ANSI = re.compile(r"\033\[[0-9;?]*[A-Za-z]")
@@ -286,6 +294,39 @@ def ctl_status() -> tuple[str, list[str]]:
     if not lines:
         return "STOPPED", []
     return lines[0].strip(), lines[1:]
+
+
+def machine_env() -> dict:
+    """This Mac's settings as the next start will use them (bin/machine.sh --env, machine.local applied)."""
+    try:
+        raw = subprocess.check_output([os.path.join(ROOT, "bin", "machine.sh"), "--env"], text=True, timeout=4)
+    except Exception:
+        return {}
+    return dict(ln.split("=", 1) for ln in raw.splitlines() if "=" in ln)
+
+
+def local_overrides() -> list[str]:
+    """KEY=value lines of machine.local, comments dropped."""
+    try:
+        lines = open(os.path.join(ROOT, "machine.local")).read().splitlines()
+    except OSError:
+        return []
+    out = [ln.split("#", 1)[0].replace(" ", "").replace("\t", "") for ln in lines]
+    return [ln for ln in out if ln]
+
+
+def typed_hint(buf: str) -> str:
+    """What ↵ does with a command that takes arguments (the palette has no row for it)."""
+    p = buf.split()
+    if not p or p[0] not in TYPED:
+        return ""
+    if p[0] in ("/perf", "/threads"):
+        if len(p) > 1:
+            return f"↵ threads → {p[1]}"
+        return "↵ opens /config · or /perf up, down, max, eco, auto, 4, 75%"
+    if p[0] == "/set":
+        return "↵ writes machine.local and applies it" if len(p) > 1 else "/set KEY=value … (THREADS MODE WORKER POOL TLS YIELD LAN)"
+    return "↵ back to automatic" if len(p) > 1 else "/unset KEY … (back to automatic)"
 
 
 def session_snapshot(live: dict) -> dict:
@@ -713,6 +754,11 @@ class App:
     _clear_next: bool = False
     fleet_fixed: Optional[tuple] = None  # canned (rows, meta) for --dump and the self-test
     fleet_w: Optional[object] = None     # fleet.Watcher, started on the first frame
+    perf_target: Optional[int] = None    # + / − pending while mining (applied after PERF_DELAY)
+    perf_at: float = 0.0
+    env_cache: Optional[tuple] = None    # (ts, machine_env())
+    env_fixed: Optional[dict] = None     # canned machine_env() for --dump and the self-test
+    ctl_note: str = ""                   # the last settings change, shown on the /config card
 
     # ------------------------------------------------------------------ plumbing
     def tty_size(self) -> tuple[int, int]:
@@ -1244,7 +1290,7 @@ class App:
         rows_in = [
             title,
             "",
-            f"{SEC}job:     {INK}{spec}{SEC}     /config to view{INK}",
+            f"{SEC}job:     {INK}{spec}{SEC}     + / − threads · /config{INK}",
             f"{SEC}pool:    {INK}{job.get('pool','-')}",
             f"{SEC}folder:  {INK}{short_path(str(job.get('cwd') or ROOT), inner - 9)}",
         ]
@@ -1423,23 +1469,50 @@ class App:
             return rows
         if tab == "Config":
             flex = os.path.isfile(os.path.join(ROOT, "flex.on"))
+            env = self.env()
+            thr = env.get("THREADS") or str(job.get("threads") or "—")
+            cores = env.get("CORES") or "—"
+            spec = env.get("THREADS_SPEC") or "auto"
+            try:
+                frac = int(thr) / int(cores)
+            except ValueError:
+                frac = 0.0
+            if self.perf_target is not None:
+                thr_v = f"{thr} → {BOLD}{self.perf_target}{NOBOLD} of {cores}{SEC} · applying in a moment{INK}"
+            else:
+                src = "auto" if spec == "auto" else f"THREADS={spec} · auto is {env.get('AUTO_THREADS') or '—'}"
+                thr_v = f"{thr} of {cores}  {bar(frac, 12)}  {SEC}{src}{INK}"
+            if run and not self.dump and str(job.get("threads")) not in ("-", thr):
+                thr_v += f"{WARN} · xmrig still runs {job.get('threads')}{INK}"
+            mode_spec = env.get("MODE_SPEC") or "auto"
+            yld = env.get("YIELD") or "off"
+            pool = env.get("POOL") or job.get("pool") or "—"
+            tls = (env.get("TLS") == "on") if env else bool(job.get("tls"))
+            ovr = [] if self.dump else local_overrides()
+            key = lambda k: f"{CYAN}{k}{SEC}"  # noqa: E731
             rows = [
+                kv("Threads", thr_v),
+                kv("CPU", f"about {frac * 100:.0f}% of this Mac while mining" if frac else "—"),
+                kv("Mode", (env.get("MODE") or job.get("mode") or "—") + f"{SEC} · {'auto' if mode_spec == 'auto' else 'MODE=' + mode_spec}{INK}"),
+                kv("Yield", "on · other apps first, lower H/s" if yld == "on" else "off · xmrig keeps its cores"),
                 kv("Algorithm", job.get("algo") or "—"),
-                kv("Mode", job.get("mode") or "—"),
-                kv("Threads", str(job.get("threads") or "—")),
-                kv("Init", str(job.get("init") or "—")),
-                kv("Pool", job.get("pool") or "—"),
-                kv("Worker", job.get("worker") or "—"),
+                kv("Pool", f"{pool}{SEC} · {'TLS' if tls else 'no TLS'}{INK}"),
+                kv("Worker", env.get("WORKER") or job.get("worker") or "—"),
                 kv("HTTP API", f"{job.get('http_host', '127.0.0.1')}:{job.get('http', '18088')}"
                    + (f"{SEC} · LAN, token from fleet.token{INK}" if job.get("http_host") == "0.0.0.0"
                       else f"{SEC} · this Mac only{INK}")),
                 kv("Donate", f"{job.get('donate') or '0'}%"),
                 kv("Priority", "--cpu-priority=4 → nice -10 (needs root)"),
                 kv("Flex", "on · pool picks the algo" if flex else "off · rx/0 only"),
-                kv("Job file", os.path.basename(PLIST)),
+                kv("Overrides", ("machine.local: " + ", ".join(ovr)) if ovr else f"none{SEC} · every setting automatic{INK}"),
                 kv("Folder", short_path(str(job.get("cwd") or ROOT), self.lw - 22)),
+            ]
+            if self.ctl_note:
+                rows.append(f"  {SEC}└ {INK}{self.ctl_note}")
+            rows += [
                 "",
-                f"  {SEC}Edit the plist, then t and s to apply. Mining starts on s only.{INK}",
+                f"  {key('+ −')} threads · {key('a')} auto · {key('x')} max · {key('o')} eco · {key('m')} mode · {key('y')} yield · {key('e')} edit{INK}",
+                f"  {SEC}Applies now; a running xmrig restarts (~1 min to full speed).{INK}",
             ]
             return rows
         api = live.get("api") or {}
@@ -1485,7 +1558,7 @@ class App:
             lines = self.palette_lines(False)
         cmds = [ln for ln in lines if ln[0] == "c"]
         if not cmds:
-            return [self.r(f"  {SEC}no matching commands{INK}")]
+            return [self.r(f"  {SEC}{typed_hint(self.palette_query()) or 'no matching commands'}{INK}")]
         sel = max(0, min(self.sel, len(cmds) - 1))
         if len(lines) > n:  # scroll a window of the flat list around the selection
             start = min(max(0, sel - n + 1), len(lines) - n)
@@ -1569,10 +1642,15 @@ class App:
             right = "offline sweep · mines nothing"
         elif self.mode == "overlay":
             keys = [("←→", "cards"), ("esc", "back"), ("s", "start"), ("t", "stop")]
+            if TABS[self.tab] == "Config":
+                keys = [("←→", "cards"), ("+−", "threads"), ("e", "edit"), ("esc", "back")]
             right = ""
         else:
-            keys = [("↵", "run"), ("s", "start"), ("t", "stop"), ("/", "commands"), ("⌃C", "quit")]
+            keys = [("↵", "run"), ("s", "start"), ("t", "stop"), ("+−", "threads"), ("/", "commands"), ("⌃C", "quit")]
             right = ""
+        if self.perf_target is not None:
+            wait = max(0.0, PERF_DELAY - (time.time() - self.perf_at))
+            right = f"threads {self.env().get('THREADS', '?')} → {self.perf_target} · restarting in {wait:.0f}s"
         if not right:
             if state == "RUNNING":
                 hs = live["hs"] or 0
@@ -1709,15 +1787,7 @@ class App:
             self.mode = "home"
             return
         if lines and lines[0].startswith("Started"):
-            self.start_ts = time.time()
-            self.ds_ready_s = None
-            self.share_rows = []
-            self.last_acc = self.last_rej = self.last_fail = None
-            self.nice_cache = None
-            self.drop("dsprog", "shares", "dataset", "pool")
-            self.add("start", cmd=cmd, nice=nice)
-            self.add("dsprog")
-            self.prev_state = "STARTING"
+            self.note_started(nice)
         elif lines and lines[0].startswith("Already running"):
             # leftover from a previous window (q does not stop xmrig). Attach; do not spawn.
             api = api_summary()
@@ -1737,6 +1807,110 @@ class App:
             self.say(*(lines or ["start: no output"]))
         self.live_cache = None
         self.mode = "home"
+
+    def note_started(self, nice: str = "") -> None:
+        """Book a fresh xmrig in the ledger: s, or the restart after a settings change."""
+        self.start_ts = time.time()
+        self.ds_ready_s = None
+        self.share_rows = []
+        self.last_acc = self.last_rej = self.last_fail = None
+        self.nice_cache = None
+        self.drop("dsprog", "shares", "dataset", "pool")
+        self.add("start", cmd=parse_job().get("cmdline") or "", nice=nice)
+        self.add("dsprog")
+        self.prev_state = "STARTING"
+
+    # ------------------------------------------------------------------ settings (machine.local)
+    def env(self) -> dict:
+        if self.env_fixed is not None:
+            return self.env_fixed
+        now = time.time()
+        if self.env_cache is None or now - self.env_cache[0] > 5:
+            self.env_cache = (now, machine_env())
+        return self.env_cache[1]
+
+    def ctl(self, *args: str) -> None:
+        """Run minerctl (perf / config), print its answer; a restart in it is booked like s."""
+        try:
+            p = subprocess.run([CTL, *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
+            out = p.stdout or ""
+        except Exception as e:
+            out = str(e)
+        lines = [ln.rstrip() for ln in out.splitlines() if ln.strip()]
+        nice = next((ln.strip() for ln in lines if ln.startswith("Nice:")), "")
+        shown = [ln for ln in lines if not ln.startswith(("Started", "Nice:", "Job file written"))]
+        self.say(*(shown or ["(no output)"]))
+        self.ctl_note = " · ".join(ln.strip() for ln in shown[:2])
+        self.env_cache = None
+        self.live_cache = None
+        if any(ln.startswith("Started") for ln in lines):
+            self.note_started(nice)
+
+    def perf_step(self, d: int) -> None:
+        """+ / −: one thread more or fewer. Stopped, it applies at once; mining, presses gather
+        for PERF_DELAY seconds so a single restart applies them all."""
+        env = self.env()
+        try:
+            cores, cur = int(env["CORES"]), int(env["THREADS"])
+        except (KeyError, ValueError):
+            self.say("Could not read this Mac's threads (./bin/machine.sh --env).")
+            return
+        base = self.perf_target if self.perf_target is not None else cur
+        new = max(1, min(cores, base + d))
+        if new == base:
+            if self.perf_target is None:
+                self.ctl_note = f"Already {'at the top' if d > 0 else 'at the bottom'}: {cur} of {cores} threads."
+                self.say(self.ctl_note)
+            return
+        self.perf_target = None if new == cur else new
+        self.perf_at = time.time()
+        if self.perf_target is not None and self.live()["state"] == "STOPPED":
+            self.apply_perf()
+
+    def apply_perf(self) -> None:
+        n, self.perf_target = self.perf_target, None
+        if n is None:
+            return
+        self.add("user", text=f"/perf {n}")
+        if not self.dump:
+            self.draw()  # the restart blocks for a few seconds; show the turn first
+        self.ctl("perf", str(n))
+
+    def run_typed(self, parts: list[str]) -> None:
+        """/perf N, /threads N, /set KEY=value …, /unset KEY … from the prompt or a /config key."""
+        self.add("user", text=" ".join(parts))
+        if not self.dump:
+            self.draw()
+        self.perf_target = None
+        head, rest = parts[0], parts[1:]
+        if head in ("/perf", "/threads"):
+            self.ctl("perf", *rest[:1])
+        elif head == "/set":
+            self.ctl("config", "set", *rest)
+        else:
+            self.ctl("config", "unset", *rest)
+
+    def do_edit(self) -> None:
+        """e on /config: machine.local in $EDITOR (nano), then apply it here so a restart is followed."""
+        self.restore_tty()
+        sys.stdout.write(SHOW + WRAP_ON + RESET + ALT_OFF)
+        sys.stdout.flush()
+        try:
+            rc = subprocess.call([CTL, "config", "edit", "--no-apply"])
+        except Exception as e:
+            rc = 1
+            print(f"  edit failed: {e}")
+        self.take_tty()
+        sys.stdout.write(ALT_ON + HIDE + WRAP_OFF)
+        sys.stdout.flush()
+        self._clear_next = True
+        self.last_frame = ""
+        self.add("user", text="/config edit")
+        if rc != 0:
+            self.ctl_note = "Editor exited with an error; nothing applied."
+            self.say(self.ctl_note)
+            return
+        self.ctl("config", "apply")
 
     def do_stop(self) -> None:
         self.add("user", text="t")
@@ -1915,6 +2089,12 @@ class App:
                 return True
             if key in ("q", "Q"):
                 return False
+            if key in ("+", "="):
+                self.perf_step(1)
+                return True
+            if key in ("-", "_"):
+                self.perf_step(-1)
+                return True
         if key == "up":
             if ms:
                 self.sel = (self.sel - 1) % len(ms)
@@ -1940,6 +2120,10 @@ class App:
             self.buf = ""
             self.sel = 0
             if not text:
+                return True
+            parts = text.split()
+            if parts[0] in TYPED and len(parts) > 1:
+                self.run_typed(parts)
                 return True
             if action:
                 self.note_recent(action)
@@ -1986,6 +2170,27 @@ class App:
         if key == "e" and TABS[self.tab] == "Logs":
             self.log_which = "log" if self.log_which == "err" else "err"
             return True
+        if TABS[self.tab] == "Config":
+            if key in ("+", "="):
+                self.perf_step(1)
+                return True
+            if key in ("-", "_"):
+                self.perf_step(-1)
+                return True
+            if key == "e":
+                self.do_edit()
+                return True
+            env = self.env()
+            typed = {
+                "a": ["/perf", "auto"],
+                "x": ["/perf", "max"],
+                "o": ["/perf", "eco"],
+                "m": ["/set", "MODE=" + ("light" if env.get("MODE") == "fast" else "fast")],
+                "y": ["/set", "YIELD=" + ("off" if env.get("YIELD") == "on" else "on")],
+            }
+            if key in typed:
+                self.run_typed(typed[key])
+                return True
         if key in "1234":
             i = int(key) - 1
             if i < len(TABS):
@@ -2046,6 +2251,10 @@ class App:
                 key = self.read_key()
                 resized = self._resized or self.size()
                 if key is None:
+                    if self.perf_target is not None and time.time() - self.perf_at >= PERF_DELAY:
+                        self.apply_perf()
+                        self.draw()
+                        continue
                     if resized:
                         cached = self.live_cache[1] if self.live_cache else None
                         self.draw(force=True, live=cached)
@@ -2133,6 +2342,9 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
     live = _demo_live("STOPPED" if stopped else "STARTING" if starting else "RUNNING")
     app.fixed_live = live
     app.fleet_fixed = _demo_fleet()
+    app.env_fixed = {"ARCH": "arm64", "CORES": "10", "AUTO_THREADS": "10", "THREADS": "10", "THREADS_SPEC": "auto",
+                     "MODE": "fast", "MODE_SPEC": "auto", "WORKER": "minerv3-m4-16gb",
+                     "POOL": "gulf.moneroocean.stream:20016", "TLS": "on", "YIELD": "off", "LAN": "on"}
     now = time.time()
     if starting:
         app.start_ts = now - 3.2
@@ -2333,7 +2545,42 @@ def self_test() -> int:
     usage = dump_frame("usage", strip=True)
     check("usage card", "› /usage" in usage and "XMR Miner · usage" in usage and "Hashrate:" in usage and "[" in usage and "Windows:" in usage and "Cadence:" in usage and "Uptime:      16h 08m 00s" in usage)
     config = dump_frame("config", strip=True)
-    check("config card", "Algorithm:" in config and "Job file:" in config and "Edit the plist" in config)
+    check("config card", "Algorithm:" in config and "Overrides:" in config and "+ − threads" in config and "e edit" in config)
+    check("config threads row", "Threads:     10 of 10" in config and "]  auto" in config and "about 100% of this Mac" in config)
+    check("config footer keys", "+− threads" in config and "e edit" in config)
+    check("typed hints", typed_hint("/perf 4") == "↵ threads → 4" and "KEY=value" in typed_hint("/set") and typed_hint("/usage") == "")
+    check("alias /perf opens config", resolve_action("/perf", None) == "config" and resolve_action("/threads", None) == "config")
+
+    def ctl_app(state: str, threads: str = "3", cores: str = "8") -> tuple:
+        a = demo_app("home" if state == "RUNNING" else "home-stopped")
+        a.env_fixed = dict(a.env_fixed, THREADS=threads, CORES=cores)
+        calls: list = []
+        a.ctl = lambda *args: calls.append(args)  # type: ignore
+        return a, calls
+
+    a, calls = ctl_app("RUNNING")
+    a.on_key_home("+"); a.on_key_home("+")
+    check("+ while mining waits (one restart)", a.perf_target == 5 and calls == [])
+    check("footer shows the pending change", "threads 3 → 5 · restarting in" in plain(a.footer_row(a.live())))
+    a.on_key_home("-"); a.on_key_home("-")
+    check("+ + − − cancels", a.perf_target is None and calls == [])
+    a.on_key_home("-"); a.perf_at -= PERF_DELAY; a.apply_perf()
+    check("pending applies as /perf N", calls == [("perf", "2")] and a.perf_target is None)
+    a, calls = ctl_app("STOPPED")
+    a.on_key_home("+")
+    check("+ while stopped applies at once", calls == [("perf", "4")])
+    a, calls = ctl_app("RUNNING", threads="8")
+    a.on_key_home("+")
+    check("+ at the top says so", calls == [] and a.perf_target is None and "Already at the top" in a.ctl_note)
+    a, calls = ctl_app("RUNNING")
+    a.buf = "/perf max"; a.on_key_home("enter")
+    a.buf = "/set MODE=light YIELD=on"; a.on_key_home("enter")
+    check("typed /perf and /set", calls == [("perf", "max"), ("config", "set", "MODE=light", "YIELD=on")])
+    a, calls = ctl_app("RUNNING")
+    a.mode = "overlay"; a.tab = TABS.index("Config")
+    for k in ("m", "y", "a", "x", "o"):
+        a.on_key_overlay(k)
+    check("config card keys", calls == [("config", "set", "MODE=light"), ("config", "set", "YIELD=on"), ("perf", "auto"), ("perf", "max"), ("perf", "eco")] and a.mode == "overlay")
     check("config priority", "Priority:" in config and "nice -10" in config)
     check("config API row", "HTTP API:" in config and (":18088 · LAN, token from fleet.token" in config or ":18088 · this Mac only" in config))
     fl = dump_frame("fleet", strip=True)

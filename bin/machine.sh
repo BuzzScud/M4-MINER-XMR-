@@ -15,10 +15,14 @@
 # The job file (com.minerv3.xmrig.plist) is rendered from these values at
 # install and again at every start, so a folder copied to another Mac just
 # works. Do not edit the plist by hand; put overrides in machine.local
-# (gitignored, next to install.sh), one KEY=value per line:
-#   THREADS=8
-#   MODE=light
+# (gitignored, next to install.sh), one KEY=value per line, or use
+# `minerctl perf` / `minerctl config set` to write them for you:
+#   THREADS=8          or auto | max (every logical CPU) | eco (half of auto) | 75% (of logical CPUs)
+#   MODE=light         or fast | auto
 #   WORKER=minerv3-studio
+#   POOL=host:port     default gulf.moneroocean.stream:20016
+#   TLS=off            only for a pool port without TLS
+#   YIELD=on           let other apps have the CPU first (drops --cpu-no-yield; lower H/s)
 #   LAN=off            keep this Mac's API on 127.0.0.1 (the fleet view cannot see it)
 #
 # Fleet: with fleet.token present the API listens on the LAN (0.0.0.0:18088),
@@ -26,8 +30,101 @@
 # Restricted mode stays on: read-only, and /1/config (which holds the wallet) is 403.
 # =============================================================================
 
-POOL="gulf.moneroocean.stream:20016"
+POOL_DEFAULT="gulf.moneroocean.stream:20016"
+POOL="$POOL_DEFAULT"
 LABEL="com.minerv3.xmrig"
+SETTING_KEYS=(THREADS MODE WORKER POOL TLS YIELD LAN)
+
+# True when VALUE is a valid machine.local setting for KEY.
+setting_ok() {
+  local k="$1" v="$2"
+  case "$k" in
+    THREADS) [[ "$v" == (auto|max|eco) || "$v" == <1-> || "$v" == <1-100>% ]] ;;
+    MODE)    [[ "$v" == (fast|light|auto) ]] ;;
+    WORKER)  [[ -n "$v" && "$v" != *[^A-Za-z0-9._-]* ]] ;;
+    POOL)    [[ "$v" == *:<1-65535> && -n "${v%:*}" && "${v%:*}" != *[^A-Za-z0-9.-]* ]] ;;
+    TLS|YIELD|LAN) [[ "$v" == (on|off) ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# What each key takes, for error messages.
+setting_help() {
+  case "$1" in
+    THREADS) print -r -- "THREADS=<1-${CORES:-N}> | auto | max | eco | <1-100>%" ;;
+    MODE)    print -r -- "MODE=fast | light | auto" ;;
+    WORKER)  print -r -- "WORKER=<letters, digits, . _ ->" ;;
+    POOL)    print -r -- "POOL=<host>:<port>" ;;
+    TLS)     print -r -- "TLS=on | off" ;;
+    YIELD)   print -r -- "YIELD=on | off" ;;
+    LAN)     print -r -- "LAN=on | off" ;;
+    *)       print -r -- "keys: ${SETTING_KEYS[*]}" ;;
+  esac
+}
+
+# THREADS spec -> a thread count for this Mac, 1..CORES. Needs CORES and AUTO_THREADS.
+resolve_threads() {
+  local v="$1" n
+  case "$v" in
+    auto)  n=$AUTO_THREADS ;;
+    max)   n=$CORES ;;
+    eco)   n=$(( (AUTO_THREADS + 1) / 2 )) ;;
+    <->%)  n=$(( (CORES * ${v%\%} + 99) / 100 )) ;;
+    <->)   n=$v ;;
+    *)     return 1 ;;
+  esac
+  (( n < 1 )) && n=1
+  (( n > CORES )) && n=$CORES
+  print -r -- "$n"
+}
+
+# machine.local editing: one KEY=value per line; comments and other keys are kept.
+local_get() {
+  local f="$1/machine.local" line
+  [[ -f "$f" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line//[[:space:]]/}"
+    [[ "$line" == "$2="* ]] && { print -r -- "${line#*=}"; return 0; }
+  done < "$f"
+  return 1
+}
+
+local_unset() {
+  local f="$1/machine.local" tmp
+  [[ -f "$f" ]] || return 0
+  tmp=$(mktemp "${TMPDIR:-/tmp}/machinelocal.XXXXXX") || return 1
+  grep -vE "^[[:space:]]*$2[[:space:]]*=" "$f" > "$tmp"
+  mv -f "$tmp" "$f"
+}
+
+local_set() {
+  local root="$1" k="$2" v="$3"
+  local_unset "$root" "$k" || return 1
+  print -r -- "$k=$v" >> "$root/machine.local"
+}
+
+# Lines in machine.local that machine_detect ignores, one per line ("line N: text").
+local_problems() {
+  local f="$1/machine.local" line raw n=0 k v
+  [[ -f "$f" ]] || return 0
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    n=$(( n + 1 ))
+    line="${raw%%#*}"
+    line="${line//[[:space:]]/}"
+    [[ -z "$line" ]] && continue
+    if [[ "$line" != *=* ]]; then
+      print -r -- "line $n: $raw   (not KEY=value)"
+      continue
+    fi
+    k="${line%%=*}"; v="${line#*=}"
+    if (( ! ${SETTING_KEYS[(Ie)$k]} )); then
+      print -r -- "line $n: $raw   (unknown key; $(setting_help ''))"
+    elif ! setting_ok "$k" "$v"; then
+      print -r -- "line $n: $raw   (want $(setting_help "$k"))"
+    fi
+  done < "$f"
+}
 
 # "Apple M1 Pro" -> m1-pro     "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz" -> i7-8700b
 chip_slug() {
@@ -49,7 +146,8 @@ chip_slug() {
   print -r -- "${s:-cpu}"
 }
 
-# Sets: ARCH CHIP CORES PHYS PCORE ECORE RAMGB L3 CORES_LABEL THREADS MODE RXINIT WORKER
+# Sets: ARCH CHIP CORES PHYS PCORE ECORE RAMGB L3 CORES_LABEL THREADS AUTO_THREADS THREADS_SPEC
+#       MODE MODE_SPEC RXINIT WORKER POOL TLS YIELD LAN
 machine_detect() {
   local root="$1"
   ARCH=$(uname -m)
@@ -80,13 +178,20 @@ machine_detect() {
     THREADS=$PHYS
   fi
 
+  AUTO_THREADS=$THREADS
+  THREADS_SPEC="auto"
+
   MODE="fast"
   (( RAMGB < 8 )) && MODE="light"
+  MODE_SPEC="auto"
   RXINIT=$CORES
   WORKER="minerv3-$(chip_slug "$CHIP")-${RAMGB}gb"
+  POOL="$POOL_DEFAULT"
+  TLS="on"
+  YIELD="off"
   LAN="on"
 
-  # machine.local overrides
+  # machine.local overrides (invalid lines are skipped; `minerctl config` lists them)
   local f="$root/machine.local" line k v
   if [[ -f "$f" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -94,11 +199,16 @@ machine_detect() {
       line="${line//[[:space:]]/}"
       [[ -z "$line" || "$line" != *=* ]] && continue
       k="${line%%=*}"; v="${line#*=}"
+      [[ "$k" == WORKER ]] && v="${v//[^A-Za-z0-9._-]/}"
+      setting_ok "$k" "$v" || continue
       case "$k" in
-        THREADS) [[ "$v" == <-> ]] && (( v >= 1 )) && THREADS=$v ;;
-        MODE)    [[ "$v" == fast || "$v" == light ]] && MODE=$v ;;
-        WORKER)  [[ -n "$v" ]] && WORKER="${v//[^A-Za-z0-9._-]/}" ;;
-        LAN)     [[ "$v" == on || "$v" == off ]] && LAN=$v ;;
+        THREADS) THREADS=$(resolve_threads "$v"); THREADS_SPEC=$v ;;
+        MODE)    MODE_SPEC=$v; [[ "$v" != auto ]] && MODE=$v ;;
+        WORKER)  WORKER=$v ;;
+        POOL)    POOL=$v ;;
+        TLS)     TLS=$v ;;
+        YIELD)   YIELD=$v ;;
+        LAN)     LAN=$v ;;
       esac
     done < "$f"
   fi
@@ -155,10 +265,12 @@ xmrig_has_arch() {
 
 # The launchd job for this Mac, from the values machine_detect + read_wallet set.
 render_job_file() {
-  local root="$1" logs="$1/logs" token_line=""
+  local root="$1" logs="$1/logs" token_line="" tls_line="" yield_line=""
   if [[ -n "${FLEET_TOKEN:-}" ]]; then
     token_line=$'\n'"        <string>--http-access-token=$FLEET_TOKEN</string>"
   fi
+  [[ "${TLS:-on}" == on ]] && tls_line=$'\n'"        <string>--tls</string>"
+  [[ "${YIELD:-off}" == off ]] && yield_line=$'\n'"        <string>--cpu-no-yield</string>"
   cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -174,13 +286,11 @@ render_job_file() {
         <string>-u</string><string>$WALLET.$WORKER</string>
         <string>-p</string><string>x</string>
         <string>-a</string><string>rx/0</string>
-        <string>-k</string>
-        <string>--tls</string>
+        <string>-k</string>$tls_line
         <string>--randomx-mode=$MODE</string>
         <string>--randomx-init=$RXINIT</string>
         <string>--cpu-priority=4</string>
-        <string>--threads=$THREADS</string>
-        <string>--cpu-no-yield</string>
+        <string>--threads=$THREADS</string>$yield_line
         <string>--http-host=$(api_host)</string>
         <string>--http-port=18088</string>$token_line
         <string>--api-worker-id=$WORKER</string>
@@ -230,10 +340,14 @@ machine_print() {
   echo "  Chip:    $CHIP"
   echo "  Cores:   $CORES_LABEL"
   echo "  Memory:  ${RAMGB} GB"
-  echo "  Threads: $THREADS"
-  echo "  Mode:    $MODE"
+  local tsrc="auto" msrc="auto"
+  [[ "$THREADS_SPEC" != auto ]] && tsrc="THREADS=$THREADS_SPEC in machine.local"
+  [[ "$MODE_SPEC" != auto ]] && msrc="MODE=$MODE_SPEC in machine.local"
+  echo "  Threads: $THREADS of $CORES logical  (auto is $AUTO_THREADS; now: $tsrc)"
+  echo "  Mode:    $MODE  ($msrc)"
   echo "  Worker:  $WORKER"
-  echo "  Pool:    $POOL"
+  echo "  Pool:    $POOL$([[ "$TLS" == on ]] && echo " (TLS)" || echo " (no TLS)")"
+  echo "  Yield:   $YIELD$([[ "$YIELD" == on ]] && echo " (other apps first; lower H/s)" || echo " (--cpu-no-yield: xmrig keeps its cores)")"
   if [[ "$(api_host)" == 0.0.0.0 ]]; then
     echo "  API:     0.0.0.0:18088 (LAN, token from fleet.token)"
   elif [[ -n "${FLEET_TOKEN:-}" ]]; then
@@ -248,6 +362,13 @@ if [[ "${ZSH_EVAL_CONTEXT:-}" == "toplevel" ]]; then
   _root="${0:A:h:h}"
   machine_detect "$_root"
   read_fleet_token "$_root"
+  if [[ "${1:-}" == --env ]]; then
+    # machine-readable, for bin/miner-ui.py
+    for _k in ARCH CORES PHYS L3 RAMGB AUTO_THREADS THREADS THREADS_SPEC MODE MODE_SPEC WORKER POOL TLS YIELD LAN; do
+      print -r -- "$_k=${(P)_k}"
+    done
+    exit 0
+  fi
   machine_print
   if [[ -f "$_root/machine.local" ]]; then
     echo "  Overrides: machine.local"

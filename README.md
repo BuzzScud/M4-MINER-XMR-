@@ -50,8 +50,8 @@ RandomX lab page: `lab/RandomX-formula-lab.html` (the real one; the original ske
 - Binary: `bin/xmrig` is universal (XMRig 6.26.0, arm64 + x86_64); the kernel runs the native slice. The arm64 slice is
   the build that beat a Clang 17 `-mcpu=native` rebuild on the M4 (4,204 vs 3,874 H/s); the x86_64 slice is the
   official release (checksum verified).
-- Overrides: `machine.local` with `THREADS=`, `MODE=fast|light`, `WORKER=` lines. Do not edit the plist by hand;
-  start re-renders it.
+- Overrides: `machine.local`, one `KEY=value` per line. Do not edit the plist by hand; start re-renders it.
+  `minerctl perf` / `minerctl config` and the `/config` card write it for you (see Performance and settings).
 - `-a rx/0` on every Mac.
 - `/flex` in the Terminal UI: pool may pick algo. Default is `rx/0`. Does not start mining.
 - **Not mining** until you start it
@@ -70,7 +70,49 @@ cd "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"
 ./bin/minerctl.sh fleet here   # on any Mac: can the others see this one? (bind, token, LAN, firewall)
 ./bin/minerctl.sh fleet scan   # look for miners on this subnet now
 ./bin/minerctl.sh update   # git pull from GitHub, re-run install (no prompt), restart xmrig if it was running
+./bin/minerctl.sh perf     # threads now; perf up | down | max | eco | auto | 6 | 75%
+./bin/minerctl.sh config   # every setting; config set KEY=value | unset KEY | edit | reset | help
+./bin/minerctl.sh bench    # offline thread sweep (stop the miner first); prints the perf line to use
+./bin/minerctl.sh restart  # stop + start without a Desktop summary
+./bin/minerctl.sh help
 ```
+
+## Performance and settings
+
+Threads are the performance knob. More threads = more CPU; whether that is more H/s depends on the cache:
+RandomX keeps a 2 MB scratchpad per thread in L3. Apple Silicon: every core pays off. Intel: past L3 ÷ 2 MB threads
+(3 on a 6 MB i7-6700HQ, 6 on a 12 MB i7-8700B) each extra thread mostly adds heat. `minerctl bench` measures it.
+
+Activity Monitor: the CPU Load graph is a share of *every* logical CPU, so 3 threads on an 8-thread i7 peak near
+38%, and xmrig's row reads ~300%. That is the setting, not a fault.
+
+```bash
+./bin/minerctl.sh perf up        # one more thread   (UI: + on the home screen or the /config card)
+./bin/minerctl.sh perf down      # one fewer          (UI: −)
+./bin/minerctl.sh perf max       # every logical CPU
+./bin/minerctl.sh perf eco       # half of auto (a quieter Mac)
+./bin/minerctl.sh perf 75%       # a share of the logical CPUs
+./bin/minerctl.sh perf auto      # back to this Mac's rule
+./bin/minerctl.sh config set THREADS=4 MODE=fast YIELD=off
+./bin/minerctl.sh config edit    # machine.local in $EDITOR (nano), commented template on first use
+```
+
+Every change is written to `machine.local`, the job file is re-rendered, and a running xmrig restarts (the dataset
+rebuilds, about a minute to full speed; no Desktop summary for a restart). Stopped, it applies on the next start.
+
+| Key       | Values                                               | Default                                 |
+|-----------|------------------------------------------------------|-----------------------------------------|
+| `THREADS` | `1`…logical CPUs, `auto`, `max`, `eco`, `N%`         | `auto` (Apple: every core; Intel: L3 ÷ 2 MB) |
+| `MODE`    | `fast`, `light`, `auto`                              | `auto` (fast with 8 GB+ RAM)            |
+| `WORKER`  | letters, digits, `. _ -`                             | `minerv3-<chip>-<ram>gb`                |
+| `POOL`    | `host:port`                                          | `gulf.moneroocean.stream:20016`         |
+| `TLS`     | `on`, `off`                                          | `on` (set `off` only for a plain port)  |
+| `YIELD`   | `on` (other apps first, lower H/s), `off`            | `off` (`--cpu-no-yield`)                |
+| `LAN`     | `on`, `off`                                          | `on` (API on the LAN with fleet.token)  |
+
+In the UI: `+` / `−` on the home screen change threads (while mining, presses gather for 1.5 s so one restart
+applies them); `/config` shows every setting and takes `+ −` threads, `a` auto, `x` max, `o` eco, `m` fast/light,
+`y` yield, `e` edit machine.local. Typed: `/perf 4`, `/perf max`, `/set MODE=light`, `/unset THREADS`.
 
 Live stats: `curl -s -H "Authorization: Bearer $(tail -1 fleet.token)" http://127.0.0.1:18088/2/summary | python3 -m json.tool`
 
@@ -107,7 +149,9 @@ q / ⌃C       quit UI (does not stop a running miner)
              tab complete, ↵ run, esc close; each row shows what it would find right now
 /usage       card: hashrate, windows, shares, cadence, threads, dataset, pool, machine, uptime
 /fleet       card: every Mac on this wallet: state, H/s, shares, uptime, LAN or pool (also /macs)
-/config      card: threads, mode, pool, worker, flex, job file
+/config      card: threads, mode, yield, pool, worker, flex, overrides; + − a x o m y e change them
++ / −        one thread more / fewer (restarts xmrig if it is mining)
+/perf N      threads: N, up, down, max, eco, auto, 75%      /set KEY=value …   /unset KEY …
 /logs        tail -n 20 of xmrig.log (e switches to the error log)
 /err         tail -n 20 of xmrig.err.log
 /open        this folder in Finder
