@@ -111,11 +111,12 @@ rebuilds, about a minute to full speed; no Desktop summary for a restart). Stopp
 | `POOL`    | `host:port`                                          | `gulf.moneroocean.stream:20016`         |
 | `TLS`     | `on`, `off`                                          | `on` (set `off` only for a plain port)  |
 | `YIELD`   | `on` (other apps first, lower H/s), `off`            | `off` (`--cpu-no-yield`)                |
+| `PAUSE`   | `10`…`3600` seconds idle, `off` (mine while you work) | `120` (`--pause-on-active=120`: paused while the keyboard or mouse is in use) |
 | `LAN`     | `on`, `off`                                          | `on` (API on the LAN with fleet.token)  |
 
 In the UI: `+` / `−` on the home screen change threads (while mining, presses gather for 1.5 s so one restart
 applies them); `/config` shows every setting and takes `+ −` threads, `a` auto, `x` max, `o` eco, `m` fast/light,
-`y` yield, `e` edit machine.local. Typed: `/perf 4`, `/perf max`, `/set MODE=light`, `/unset THREADS`.
+`y` yield, `p` pause (120 s / off), `e` edit machine.local. Typed: `/perf 4`, `/perf max`, `/set MODE=light`, `/unset THREADS`.
 
 Live stats: `curl -s -H "Authorization: Bearer $(tail -1 fleet.token)" http://127.0.0.1:18088/2/summary | python3 -m json.tool`
 

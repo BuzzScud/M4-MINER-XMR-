@@ -203,6 +203,7 @@ local_template() {
 # POOL=$POOL_DEFAULT
 # TLS=on         off only for a pool port without TLS
 # YIELD=off      on: other apps get the CPU first (lower H/s)
+# PAUSE=120      pause while the keyboard or mouse is in use, mine after N s idle (10-3600) | off
 # LAN=on         off: API on 127.0.0.1 only (the fleet view cannot see this Mac)
 EOF
 }
@@ -510,7 +511,10 @@ d=json.load(sys.stdin); c=d["connection"]; h=d["hashrate"]["total"][0]
 up=d["uptime"]; hrs,rem=divmod(up,3600); mins=rem//60
 acc=c["accepted"]; rej=c["rejected"]; pool=c["pool"]
 print("RUNNING")
-print(f"Speed: {h:.0f} H/s" if h else "Speed: warming up...")
+if d.get("paused"):
+    print("Speed: paused (keyboard or mouse in use; mines again after the PAUSE idle time)")
+else:
+    print(f"Speed: {h:.0f} H/s" if h else "Speed: warming up...")
 print(f"Running for: {hrs}h {mins}m")
 print(f"Shares: {acc} accepted, {rej} rejected")
 print(f"Pool: {pool}")

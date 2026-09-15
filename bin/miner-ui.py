@@ -335,7 +335,7 @@ def typed_hint(buf: str) -> str:
             return f"↵ threads → {p[1]}"
         return "↵ opens /config · or /perf up, down, max, eco, auto, 4, 75%"
     if p[0] == "/set":
-        return "↵ writes machine.local and applies it" if len(p) > 1 else "/set KEY=value … (THREADS MODE WORKER POOL TLS YIELD LAN)"
+        return "↵ writes machine.local and applies it" if len(p) > 1 else "/set KEY=value … (THREADS MODE WORKER POOL TLS YIELD PAUSE LAN)"
     return "↵ back to automatic" if len(p) > 1 else "/unset KEY … (back to automatic)"
 
 
@@ -525,6 +525,26 @@ def core_layout() -> str:
 
 
 _BRAILLE_BITS = ((0x40, 0x04, 0x02, 0x01), (0x80, 0x20, 0x10, 0x08))  # per column, bottom dot to top dot
+
+
+def live_state(api: Optional[dict], up: bool) -> tuple:
+    """(state, 10 s H/s, paused) from /2/summary (None when the API is down) and whether xmrig runs.
+    An API with no 10 s rate is the dataset build, unless xmrig says it is paused (PAUSE)."""
+    paused = bool(api and api.get("paused"))
+    if not api:
+        return ("STARTING" if up else "STOPPED"), None, False
+    tot = (api.get("hashrate") or {}).get("total") or [None]
+    hs = tot[0] if tot else None
+    return ("RUNNING" if (hs is not None or paused) else "STARTING"), hs, paused
+
+
+def pause_label(env: dict) -> str:
+    """PAUSE from machine.sh --env in words: 120 -> "2 min", 90 -> "90 s", off or missing -> ""."""
+    v = str(env.get("PAUSE") or "")
+    if not v.isdigit():
+        return ""
+    n = int(v)
+    return f"{n // 60} min" if n % 60 == 0 else f"{n} s"
 
 
 def braille_rows(vals: list, w: int, h: int, lo: float, hi: float) -> list[str]:
@@ -784,6 +804,7 @@ class App:
     hist: list = field(default_factory=list)  # 10 s hashrate, one sample per poll
     thr_cache: Optional[tuple] = None
     nice_cache: Optional[tuple] = None
+    prev_paused: Optional[bool] = None
     live_cache: Optional[tuple] = None
     cursor: Optional[tuple] = None
     started: float = field(default_factory=time.time)
@@ -949,21 +970,13 @@ class App:
             return self.live_cache[1]
         job = parse_job()
         api = api_summary()
-        if api:
-            state = "RUNNING"
-        elif xmrig_up():
-            state = "STARTING"
-        else:
-            state = "STOPPED"
-        hs = None
+        state, hs, paused = live_state(api, bool(api) or xmrig_up())
         highest = PEAK_HS
         acc = rej = 0
         up = 0
         algo = job.get("algo") or "rx/0"
         hugepages = None
         if api:
-            tot = ((api.get("hashrate") or {}).get("total") or [None])
-            hs = tot[0] if tot else None
             try:
                 highest = max(float((api.get("hashrate") or {}).get("highest") or 0), PEAK_HS)
             except Exception:
@@ -978,10 +991,9 @@ class App:
             up = int(api.get("uptime") or conn.get("uptime") or 0)
             algo = api.get("algo") or algo
             hugepages = api.get("hugepages")
-        if state == "RUNNING" and hs is None:
-            state = "STARTING"  # API is up but RandomX is still building the dataset
         live = {
             "state": state,
+            "paused": paused,
             "job": job,
             "api": api,
             "hs": hs,
@@ -999,7 +1011,7 @@ class App:
             save_session_snapshot(live)
         self.live_cache = (now, live)
         if state == "RUNNING":
-            self.hist.append(hs)
+            self.hist.append(None if paused else hs)
             self.hist = self.hist[-240:]
         self.track(live, now)
         return live
@@ -1130,6 +1142,12 @@ class App:
                 self.add("stop", up=snap.get("up") or live.get("up") or 0, acc=snap.get("acc") or 0,
                          rej=snap.get("rej") or 0, avg=snap.get("hs15") or snap.get("hs60") or snap.get("hs10"),
                          text="xmrig exited outside this window")
+        paused = bool(live.get("paused")) if state == "RUNNING" else None
+        if paused is not None and self.prev_paused is not None and paused != self.prev_paused:
+            # one line for the latest switch: an idle Mac flips this every time you walk away
+            self.drop("pause", "resume")
+            self.add("pause" if paused else "resume")
+        self.prev_paused = paused
         if state == "RUNNING":
             acc, rej = live["acc"], live["rej"]
             since = (self.start_ts or 0) - 2
@@ -1193,12 +1211,19 @@ class App:
 
         R: list[str] = [""]
         # hashrate
-        R.append(lab("hashrate", f"{live['hs'] / peak * 100:.0f}% of peak" if run and live["hs"] else ""))
-        R.append(f"{BOLD}{fmt_hs(live['hs'])}{NOBOLD}" if run else f"{SEC}{'warming up' if starting else 'not mining'}{INK}")
+        paused = run and live.get("paused")
+        R.append(lab("hashrate", f"{live['hs'] / peak * 100:.0f}% of peak" if run and live["hs"] and not paused else ""))
+        if paused:
+            R.append(f"{WARN}{BOLD}paused{NOBOLD}{SEC} · you're active{INK}")
+        else:
+            R.append(f"{BOLD}{fmt_hs(live['hs'])}{NOBOLD}" if run else f"{SEC}{'warming up' if starting else 'not mining'}{INK}")
         spark = braille_rows(self.hist, W, 4, 3600, max(4250, peak)) if self.hist else [" " * W] * 3 + ["⣀" * W]
         R += [f"{DATA if run else FAINT}{s}{INK}" for s in spark]
-        R.append(f"{SEC}10s {fmt_n(tot[0] if tot else None)} · 60s {fmt_n(tot[1] if len(tot) > 1 else None)} · 15m {fmt_n(tot[2] if len(tot) > 2 else None)}{INK}" if run
-                 else f"{SEC}peak {fmt_n(peak)} H/s (sweep){INK}")
+        if paused:
+            R.append(f"{SEC}mines after {pause_label(self.env()) or 'the idle time'} without input{INK}")
+        else:
+            R.append(f"{SEC}10s {fmt_n(tot[0] if tot else None)} · 60s {fmt_n(tot[1] if len(tot) > 1 else None)} · 15m {fmt_n(tot[2] if len(tot) > 2 else None)}{INK}" if run
+                     else f"{SEC}peak {fmt_n(peak)} H/s (sweep){INK}")
         # shares
         R.append("")
         R.append(lab("shares", f"diff {res.get('diff_current', 0) // 1000}k" if run and res.get("diff_current") else ""))
@@ -1326,6 +1351,10 @@ class App:
     def now_row(self, live: dict, label: str = "now:     ") -> str:
         """The live line of the job card: what is happening right now, in one glance."""
         state = live["state"]
+        if state == "RUNNING" and live.get("paused"):
+            idle = pause_label(self.env()) or "the idle time"
+            return (f"{SEC}{label}{INK}{WARN}paused{INK}{SEC} · you're active · back after {idle} idle · {INK}"
+                    f"{GOOD}{fmt_n(live['acc'])} ✓{INK}")
         if state == "RUNNING":
             hs = live["hs"] or 0.0
             peak = live["highest"] or PEAK_HS
@@ -1451,6 +1480,13 @@ class App:
                     tree(f"{SEC}{fmt_n(acc)} before this window · diff {fmt_n(res.get('diff_current'))} · one every ~{avg}s{INK}")
                 else:
                     tree(f"{SEC}waiting for the first share…{INK}")
+            elif k == "pause":
+                idle = pause_label(self.env()) or "the idle time"
+                bullet(f"{WARN}Paused{INK}{SEC} · keyboard or mouse in use · {hms(e['ts'])}{INK}", WARN)
+                tree(f"{SEC}mines again after {idle} without input · PAUSE in /config{INK}")
+            elif k == "resume":
+                idle = pause_label(self.env()) or "the idle time"
+                bullet(f"{BOLD}Mining again{NOBOLD}{SEC} · no input for {idle} · {hms(e['ts'])}{INK}")
             elif k == "stop":
                 bullet(f"{BOLD}Stopped{NOBOLD} after {fmt_uptime(e.get('up') or 0)}" + (f"{SEC} · {e['text']}{INK}" if e.get("text") else ""))
                 tree(f"{GOOD}{fmt_n(e.get('acc'))}{SEC} accepted · {e.get('rej') or 0} rejected · avg {fmt_hs(e.get('avg'))}{INK}")
@@ -1570,6 +1606,8 @@ class App:
                 kv("CPU", f"about {frac * 100:.0f}% of this Mac while mining" if frac else "—"),
                 kv("Mode", (env.get("MODE") or job.get("mode") or "—") + f"{SEC} · {'auto' if mode_spec == 'auto' else 'MODE=' + mode_spec}{INK}"),
                 kv("Yield", "on · other apps first, lower H/s" if yld == "on" else "off · xmrig keeps its cores"),
+                kv("Pause", f"{pause_label(env)} idle{SEC} · paused while you're at the keyboard{INK}" if pause_label(env)
+                   else f"off{SEC} · mines while you use this Mac{INK}"),
                 kv("Algorithm", job.get("algo") or "—"),
                 kv("Pool", f"{pool}{SEC} · {'TLS' if tls else 'no TLS'}{INK}"),
                 kv("Worker", env.get("WORKER") or job.get("worker") or "—"),
@@ -1577,7 +1615,7 @@ class App:
                    + (f"{SEC} · LAN, token from fleet.token{INK}" if job.get("http_host") == "0.0.0.0"
                       else f"{SEC} · this Mac only{INK}")),
                 kv("Donate", f"{job.get('donate') or '0'}%"),
-                kv("Priority", "--cpu-priority=4 → nice -10 (needs root)"),
+                kv("Priority", "nice 0 · same as your apps (-10 needs root)"),
                 kv("Flex", "on · pool picks the algo" if flex else "off · rx/0 only"),
                 kv("Overrides", ("machine.local: " + ", ".join(ovr)) if ovr else f"none{SEC} · every setting automatic{INK}"),
                 kv("Folder", short_path(str(job.get("cwd") or ROOT), self.lw - 22)),
@@ -1586,7 +1624,8 @@ class App:
                 rows.append(f"  {SEC}└ {INK}{self.ctl_note}")
             rows += [
                 "",
-                f"  {key('+ −')} threads · {key('a')} auto · {key('x')} max · {key('o')} eco · {key('m')} mode · {key('y')} yield · {key('e')} edit{INK}",
+                f"  {key('+ −')} threads · {key('a')} auto · {key('x')} max · {key('o')} eco · {key('m')} mode{INK}",
+                f"  {key('y')} yield · {key('p')} pause · {key('e')} edit machine.local{INK}",
                 f"  {SEC}Applies now; a running xmrig restarts (~1 min to full speed).{INK}",
             ]
             return rows
@@ -1670,7 +1709,7 @@ class App:
         if state == "STOPPED":
             return None
         f = self.frame_no
-        word = "Building dataset" if state == "STARTING" else "Mining"
+        word = "Building dataset" if state == "STARTING" else ("Paused" if live.get("paused") else "Mining")
         dot = f"{SEC}{'•' if (f >> 1) % 2 else '◦'}{INK}"
         hi = (f % (len(word) + 8)) - 4
         letters = []
@@ -1680,6 +1719,8 @@ class App:
         if state == "STARTING":
             el = int(time.time() - self.start_ts) if self.start_ts else int(live["up"] or 0)
             tail = f"({fmt_uptime(el)} • t to cancel)"
+        elif live.get("paused"):
+            tail = f"(you're active • mines after {pause_label(self.env()) or 'the idle time'} idle • t to stop)"
         else:
             tail = f"({fmt_clock(live['up'])} • t to stop)"
         return self.r(f"{dot} {''.join(letters)}{NOBOLD}{SEC} {tail}{INK}")
@@ -1727,7 +1768,9 @@ class App:
             wait = max(0.0, PERF_DELAY - (time.time() - self.perf_at))
             right = f"threads {self.env().get('THREADS', '?')} → {self.perf_target} · restarting in {wait:.0f}s"
         if not right:
-            if state == "RUNNING":
+            if state == "RUNNING" and live.get("paused"):
+                right = "paused · you're active"
+            elif state == "RUNNING":
                 hs = live["hs"] or 0
                 peak = live["highest"] or PEAK_HS
                 right = f"{fmt_hs(hs)} · {hs / peak * 100:.0f}% of peak"
@@ -2262,6 +2305,7 @@ class App:
                 "o": ["/perf", "eco"],
                 "m": ["/set", "MODE=" + ("light" if env.get("MODE") == "fast" else "fast")],
                 "y": ["/set", "YIELD=" + ("off" if env.get("YIELD") == "on" else "on")],
+                "p": ["/set", "PAUSE=" + ("off" if pause_label(env) else "120")],
             }
             if key in typed:
                 self.run_typed(typed[key])
@@ -2414,14 +2458,19 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
     app.cols, app.rows = cols, rows
     stopped = kind.endswith("-stopped")
     starting = kind.endswith("-starting")
-    kind = kind.replace("-stopped", "").replace("-starting", "")
+    paused = kind.endswith("-paused")
+    kind = kind.replace("-stopped", "").replace("-starting", "").replace("-paused", "")
     live = _demo_live("STOPPED" if stopped else "STARTING" if starting else "RUNNING")
+    if paused:
+        # what xmrig reports under --pause-on-active: no 10 s or 60 s rate, "paused": true
+        api = dict(live["api"], paused=True, hashrate={"total": [None, None, 3312.6], "highest": 4201.3})
+        live = dict(live, api=api, hs=None, paused=True)
     app.fixed_live = live
     app.fleet_fixed = _demo_fleet()
     app.main = True
     app.env_fixed = {"ARCH": "arm64", "CORES": "10", "AUTO_THREADS": "10", "THREADS": "10", "THREADS_SPEC": "auto",
                      "MODE": "fast", "MODE_SPEC": "auto", "WORKER": "minerv3-m4-16gb",
-                     "POOL": "gulf.moneroocean.stream:20016", "TLS": "on", "YIELD": "off", "LAN": "on"}
+                     "POOL": "gulf.moneroocean.stream:20016", "TLS": "on", "YIELD": "off", "PAUSE": "120", "LAN": "on"}
     now = time.time()
     if starting:
         app.start_ts = now - 3.2
@@ -2459,6 +2508,9 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
         app.hist = [4150 + 42 * math.sin(i / 9) + (18 if i % 7 == 0 else -9) for i in range(160)]
         for i in range(118, 126):
             app.hist[i] = 3651 + abs(i - 121.5) * 70
+        if paused:
+            app.hist[-24:] = [None] * 24
+            app.events.append({"k": "pause", "ts": now - 95})
     if kind in ("palette", "slash", "/"):
         app.force_palette = "/" if kind != "palette" else "/usage"
     elif kind in ("usage", "fleet", "config", "logs", "err"):
@@ -2660,7 +2712,37 @@ def self_test() -> int:
     for k in ("m", "y", "a", "x", "o"):
         a.on_key_overlay(k)
     check("config card keys", calls == [("config", "set", "MODE=light"), ("config", "set", "YIELD=on"), ("perf", "auto"), ("perf", "max"), ("perf", "eco")] and a.mode == "overlay")
-    check("config priority", "Priority:" in config and "nice -10" in config)
+    check("config priority", "Priority:" in config and "nice 0" in config)
+    check("live_state: paused is not the dataset build",
+          live_state({"paused": True, "hashrate": {"total": [None, None, 3900.0]}}, True) == ("RUNNING", None, True))
+    check("live_state: no rate = starting, no API = starting/stopped",
+          live_state({"hashrate": {"total": [None, None, None]}}, True)[0] == "STARTING"
+          and live_state(None, True)[0] == "STARTING" and live_state(None, False) == ("STOPPED", None, False))
+    check("live_state: mining", live_state({"hashrate": {"total": [4100.0, 4000.0, None]}}, True) == ("RUNNING", 4100.0, False))
+    check("pause label", pause_label({"PAUSE": "120"}) == "2 min" and pause_label({"PAUSE": "90"}) == "90 s"
+          and pause_label({"PAUSE": "off"}) == "" and pause_label({}) == "")
+    hp = dump_frame("home-paused", 147, 58, strip=True)
+    check("paused frame", "Paused" in hp and "paused · you're active" in hp and "mines after 2 min" in hp
+          and "Building" not in hp and "warming up" not in hp)
+    check("config pause row", "Pause:" in config and "2 min idle" in config and "p pause" in config)
+    a, calls = ctl_app("RUNNING")
+    a.mode = "overlay"; a.tab = TABS.index("Config")
+    a.on_key_overlay("p")
+    check("config p turns PAUSE off", calls == [("config", "set", "PAUSE=off")])
+    a, calls = ctl_app("RUNNING")
+    a.env_fixed = dict(a.env_fixed, PAUSE="off")
+    a.mode = "overlay"; a.tab = TABS.index("Config")
+    a.on_key_overlay("p")
+    check("config p turns PAUSE on at 120", calls == [("config", "set", "PAUSE=120")])
+    a = demo_app("home")
+    base = a.live()
+    a.prev_paused = False
+    for flag in (True, False, True):
+        a.track(dict(base, paused=flag), time.time())
+    kinds = [e["k"] for e in a.events if e["k"] in ("pause", "resume")]
+    check("pause/resume keep one ledger line", kinds == ["pause"])
+    a.track(dict(base, paused=False), time.time())
+    check("resume replaces the pause line", [e["k"] for e in a.events if e["k"] in ("pause", "resume")] == ["resume"])
     check("config API row", "HTTP API:" in config and (":18088 · LAN, token from fleet.token" in config or ":18088 · this Mac only" in config))
     fl = dump_frame("fleet", strip=True)
     check("fleet card", "› /fleet" in fl and "XMR Miner · fleet" in fl and "Total:" in fl and "8,103 H/s · 3 of 3 mining" in fl

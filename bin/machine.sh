@@ -23,6 +23,8 @@
 #   POOL=host:port     default gulf.moneroocean.stream:20016
 #   TLS=off            only for a pool port without TLS
 #   YIELD=on           let other apps have the CPU first (drops --cpu-no-yield; lower H/s)
+#   PAUSE=120          pause while the keyboard or mouse is in use, mine again after N s idle
+#                      (10-3600, default 120; off mines while you work: --pause-on-active)
 #   LAN=off            keep this Mac's API on 127.0.0.1 (the fleet view cannot see it)
 #
 # Fleet: with fleet.token present the API listens on the LAN (0.0.0.0:18088),
@@ -33,7 +35,7 @@
 POOL_DEFAULT="gulf.moneroocean.stream:20016"
 POOL="$POOL_DEFAULT"
 LABEL="com.minerv3.xmrig"
-SETTING_KEYS=(THREADS MODE WORKER POOL TLS YIELD LAN)
+SETTING_KEYS=(THREADS MODE WORKER POOL TLS YIELD PAUSE LAN)
 
 # True when VALUE is a valid machine.local setting for KEY.
 setting_ok() {
@@ -44,6 +46,7 @@ setting_ok() {
     WORKER)  [[ -n "$v" && "$v" != *[^A-Za-z0-9._-]* ]] ;;
     POOL)    [[ "$v" == *:<1-65535> && -n "${v%:*}" && "${v%:*}" != *[^A-Za-z0-9.-]* ]] ;;
     TLS|YIELD|LAN) [[ "$v" == (on|off) ]] ;;
+    PAUSE)   [[ "$v" == off || "$v" == <10-3600> ]] ;;
     *) return 1 ;;
   esac
 }
@@ -57,6 +60,7 @@ setting_help() {
     POOL)    print -r -- "POOL=<host>:<port>" ;;
     TLS)     print -r -- "TLS=on | off" ;;
     YIELD)   print -r -- "YIELD=on | off" ;;
+    PAUSE)   print -r -- "PAUSE=<10-3600 seconds idle> | off" ;;
     LAN)     print -r -- "LAN=on | off" ;;
     *)       print -r -- "keys: ${SETTING_KEYS[*]}" ;;
   esac
@@ -147,7 +151,7 @@ chip_slug() {
 }
 
 # Sets: ARCH CHIP CORES PHYS PCORE ECORE RAMGB L3 CORES_LABEL THREADS AUTO_THREADS THREADS_SPEC
-#       MODE MODE_SPEC RXINIT WORKER POOL TLS YIELD LAN ROLE
+#       MODE MODE_SPEC RXINIT WORKER POOL TLS YIELD PAUSE LAN ROLE
 machine_detect() {
   local root="$1"
   ARCH=$(uname -m)
@@ -189,6 +193,7 @@ machine_detect() {
   POOL="$POOL_DEFAULT"
   TLS="on"
   YIELD="off"
+  PAUSE="120"
   LAN="on"
 
   # machine.local overrides (invalid lines are skipped; `minerctl config` lists them)
@@ -208,6 +213,7 @@ machine_detect() {
         POOL)    POOL=$v ;;
         TLS)     TLS=$v ;;
         YIELD)   YIELD=$v ;;
+        PAUSE)   PAUSE=$v ;;
         LAN)     LAN=$v ;;
       esac
     done < "$f"
@@ -276,12 +282,14 @@ xmrig_has_arch() {
 
 # The launchd job for this Mac, from the values machine_detect + read_wallet set.
 render_job_file() {
-  local root="$1" logs="$1/logs" token_line="" tls_line="" yield_line=""
+  local root="$1" logs="$1/logs" token_line="" tls_line="" yield_line="" pause_line=""
   if [[ -n "${FLEET_TOKEN:-}" ]]; then
     token_line=$'\n'"        <string>--http-access-token=$FLEET_TOKEN</string>"
   fi
   [[ "${TLS:-on}" == on ]] && tls_line=$'\n'"        <string>--tls</string>"
   [[ "${YIELD:-off}" == off ]] && yield_line=$'\n'"        <string>--cpu-no-yield</string>"
+  # xmrig polls the keyboard/mouse idle time twice a second; the dataset and pool stay up while paused
+  [[ "${PAUSE:-off}" != off ]] && pause_line=$'\n'"        <string>--pause-on-active=$PAUSE</string>"
   cat <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -301,7 +309,7 @@ render_job_file() {
         <string>--randomx-mode=$MODE</string>
         <string>--randomx-init=$RXINIT</string>
         <string>--cpu-priority=4</string>
-        <string>--threads=$THREADS</string>$yield_line
+        <string>--threads=$THREADS</string>$yield_line$pause_line
         <string>--http-host=$(api_host)</string>
         <string>--http-port=18088</string>$token_line
         <string>--api-worker-id=$WORKER</string>
@@ -359,6 +367,11 @@ machine_print() {
   echo "  Worker:  $WORKER"
   echo "  Pool:    $POOL$([[ "$TLS" == on ]] && echo " (TLS)" || echo " (no TLS)")"
   echo "  Yield:   $YIELD$([[ "$YIELD" == on ]] && echo " (other apps first; lower H/s)" || echo " (--cpu-no-yield: xmrig keeps its cores)")"
+  if [[ "$PAUSE" == off ]]; then
+    echo "  Pause:   off (mines while you use this Mac)"
+  else
+    echo "  Pause:   ${PAUSE} s (pauses while the keyboard or mouse is in use; mines after ${PAUSE} s idle)"
+  fi
   if [[ "$(api_host)" == 0.0.0.0 ]]; then
     echo "  API:     0.0.0.0:18088 (LAN, token from fleet.token)"
   elif [[ -n "${FLEET_TOKEN:-}" ]]; then
@@ -380,7 +393,7 @@ if [[ "${ZSH_EVAL_CONTEXT:-}" == "toplevel" ]]; then
   read_fleet_token "$_root"
   if [[ "${1:-}" == --env ]]; then
     # machine-readable, for bin/miner-ui.py
-    for _k in ARCH CORES PHYS L3 RAMGB AUTO_THREADS THREADS THREADS_SPEC MODE MODE_SPEC WORKER POOL TLS YIELD LAN; do
+    for _k in ARCH CORES PHYS L3 RAMGB AUTO_THREADS THREADS THREADS_SPEC MODE MODE_SPEC WORKER POOL TLS YIELD PAUSE LAN; do
       print -r -- "$_k=${(P)_k}"
     done
     exit 0
