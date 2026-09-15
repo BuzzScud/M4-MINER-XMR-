@@ -198,6 +198,7 @@ def parse_job(path: str = PLIST) -> dict:
         "algo": "rx/0",
         "pool": "-",
         "pool_host": "-",
+        "backup": "",
         "worker": "-",
         "user": "-",
         "http": "18088",
@@ -210,16 +211,20 @@ def parse_job(path: str = PLIST) -> dict:
     except Exception:
         return out
     args = [str(a) for a in (p.get("ProgramArguments") or [])]
+    # first value wins: a backup pool repeats -o -u -p -a after the main pool's
     d: dict[str, str] = {}
+    pools: list[str] = []
     i = 0
     while i < len(args):
         a = args[i]
         if a.startswith("-") and "=" in a:
             k, v = a.split("=", 1)
-            d[k] = v
+            d.setdefault(k, v)
             i += 1
         elif a.startswith("-") and i + 1 < len(args) and not str(args[i + 1]).startswith("-"):
-            d[a] = args[i + 1]
+            d.setdefault(a, args[i + 1])
+            if a == "-o":
+                pools.append(args[i + 1])
             i += 2
         else:
             i += 1
@@ -241,6 +246,7 @@ def parse_job(path: str = PLIST) -> dict:
             "algo": d.get("-a", "rx/0"),
             "pool": pool,
             "pool_host": pool.split(":")[0] if pool else "-",
+            "backup": pools[1] if len(pools) > 1 else "",
             "worker": worker or "-",
             "user": user or "-",
             "http": d.get("--http-port", "18088"),
@@ -265,6 +271,12 @@ def tls_label(conn: Optional[dict], job: Optional[dict] = None) -> str:
     if (job or {}).get("tls"):
         return "TLS"
     return "plain"
+
+
+def on_backup(conn: Optional[dict], job: Optional[dict]) -> bool:
+    """True while xmrig mines on the job file's second pool (the main one failed 5 times)."""
+    backup = (job or {}).get("backup")
+    return bool(backup) and (conn or {}).get("pool") == backup
 
 
 FLEET_TOKEN = fleet.read_token()
@@ -341,7 +353,7 @@ def typed_hint(buf: str) -> str:
             return f"↵ PAUSE={v} and apply it" if v else "/pause on | off | 10-3600 (seconds idle before mining again)"
         return "↵ switches it on/off · or /pause on, off, 300 (seconds idle)"
     if p[0] == "/set":
-        return "↵ writes machine.local and applies it" if len(p) > 1 else "/set KEY=value … (THREADS MODE WORKER POOL TLS YIELD PAUSE LAN)"
+        return "↵ writes machine.local and applies it" if len(p) > 1 else "/set KEY=value … (THREADS MODE WORKER POOL BACKUP TLS YIELD PAUSE LAN)"
     return "↵ back to automatic" if len(p) > 1 else "/unset KEY … (back to automatic)"
 
 
@@ -1276,7 +1288,7 @@ class App:
         R.append(lab("pool"))
         pool = conn.get("pool") or job.get("pool") or "—"
         host, _, port = str(pool).rpartition(":")
-        R.append(host or pool)
+        R.append((host or pool) + (f"{WARN} · backup{INK}" if on_backup(conn, job) else ""))
         fails = conn.get("failures")
         R.append(f"{SEC}:{port or '—'} · {tls_label(conn, job)} · {fmt_ping(conn.get('ping')) if run else '—'} · {fails if fails is not None else '—'} failure{'' if str(fails) == '1' else 's'}{INK}")
         fs = self.fleet_latest()
@@ -1474,7 +1486,7 @@ class App:
             elif k == "pool":
                 pool = conn.get("pool") or live["job"].get("pool") or "—"
                 tls_s = tls_label(conn, live["job"])
-                bullet(f"{BOLD}Connected{NOBOLD} to {pool}")
+                bullet(f"{BOLD}Connected{NOBOLD} to {pool}" + (f"{WARN} · backup pool{INK}" if on_backup(conn, live["job"]) else ""))
                 tree(f"{SEC}{tls_s} · {fmt_ping(conn.get('ping'))} · worker {live['job'].get('worker') or '—'}{INK}")
             elif k == "warn":
                 bullet(f"{WARN}{e['title']}{INK}", WARN)
@@ -1616,6 +1628,7 @@ class App:
             yld = env.get("YIELD") or "off"
             pool = env.get("POOL") or job.get("pool") or "—"
             tls = (env.get("TLS") == "on") if env else bool(job.get("tls"))
+            backup = env.get("BACKUP") or job.get("backup") or "off"
             ovr = [] if self.dump else local_overrides()
             key = lambda k: f"{CYAN}{k}{SEC}"  # noqa: E731
             rows = [
@@ -1627,6 +1640,8 @@ class App:
                    else f"off{SEC} · mines while you use this Mac{INK}"),
                 kv("Algorithm", job.get("algo") or "—"),
                 kv("Pool", f"{pool}{SEC} · {'TLS' if tls else 'no TLS'}{INK}"),
+                kv("Backup", f"{backup}{SEC} · if the pool fails 5 times{INK}" if backup != "off"
+                   else f"off{SEC} · one pool only{INK}"),
                 kv("Worker", env.get("WORKER") or job.get("worker") or "—"),
                 kv("HTTP API", f"{job.get('http_host', '127.0.0.1')}:{job.get('http', '18088')}"
                    + (f"{SEC} · LAN, token from fleet.token{INK}" if job.get("http_host") == "0.0.0.0"
@@ -2499,7 +2514,8 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
     app.main = True
     app.env_fixed = {"ARCH": "arm64", "CORES": "10", "AUTO_THREADS": "10", "THREADS": "10", "THREADS_SPEC": "auto",
                      "MODE": "fast", "MODE_SPEC": "auto", "WORKER": "minerv3-m4-16gb",
-                     "POOL": "gulf.moneroocean.stream:20016", "TLS": "on", "YIELD": "off", "PAUSE": "120", "LAN": "on"}
+                     "POOL": "gulf.moneroocean.stream:20016", "BACKUP": "de.moneroocean.stream:20016",
+                     "TLS": "on", "YIELD": "off", "PAUSE": "120", "LAN": "on"}
     now = time.time()
     if starting:
         app.start_ts = now - 3.2
@@ -2593,6 +2609,18 @@ def self_test() -> int:
         plistlib.dump({"ProgramArguments": ["xmrig", "-u", "4" + "8" * 94]}, tf)
         tf.flush()
         check("bare -u wallet is never the worker", parse_job(tf.name)["worker"] == "-")
+    with tempfile.NamedTemporaryFile(suffix=".plist") as tf:
+        u = "4" + "8" * 94 + ".minerv3-m4-16gb"
+        plistlib.dump({"ProgramArguments": ["xmrig", "-o", "gulf.moneroocean.stream:20016", "-u", u, "-a", "rx/0", "-k", "--tls",
+                                            "-o", "de.moneroocean.stream:20016", "-u", u, "-a", "rx/0", "-k", "--tls",
+                                            "--threads=10"]}, tf)
+        tf.flush()
+        two = parse_job(tf.name)
+        check("two pools: the first is the pool", two["pool"] == "gulf.moneroocean.stream:20016" and two["threads"] == "10")
+        check("two pools: the second is the backup", two["backup"] == "de.moneroocean.stream:20016")
+        check("on_backup", on_backup({"pool": "de.moneroocean.stream:20016"}, two)
+              and not on_backup({"pool": "gulf.moneroocean.stream:20016"}, two)
+              and not on_backup({"pool": ""}, {"backup": ""}))
     snap = session_snapshot(_demo_live())
     check("session snapshot", snap["acc"] == 1945 and snap["hs10"] == 4178.4 and "moneroocean" in snap["pool"])
     check("snapshot worker is not the host", snap.get("worker") != "demo-mac.local")

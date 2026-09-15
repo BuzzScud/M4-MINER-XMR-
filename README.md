@@ -109,6 +109,7 @@ rebuilds, about a minute to full speed; no Desktop summary for a restart). Stopp
 | `MODE`    | `fast`, `light`, `auto`                              | `auto` (fast with 8 GB+ RAM)            |
 | `WORKER`  | letters, digits, `. _ -`                             | `minerv3-<chip>-<ram>gb`                |
 | `POOL`    | `host:port`                                          | `gulf.moneroocean.stream:20016`         |
+| `BACKUP`  | `host:port`, `off`                                   | `de.moneroocean.stream:20016` (same pool and balance, another server: used after 5 failed tries on `POOL`, about 25 s, and dropped as soon as `POOL` answers; `off` by itself when `POOL` is not MoneroOcean) |
 | `TLS`     | `on`, `off`                                          | `on` (set `off` only for a plain port)  |
 | `YIELD`   | `on` (other apps first, lower H/s), `off`            | `off` (`--cpu-no-yield`)                |
 | `PAUSE`   | `10`…`3600` seconds idle, `off` (mine while you work) | `120` (`--pause-on-active=120`: paused while the keyboard or mouse is in use) |

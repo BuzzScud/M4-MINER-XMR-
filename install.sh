@@ -48,6 +48,7 @@ echo "  Threads: $THREADS"
 echo "  Mode:    $MODE"
 echo "  Worker:  $WORKER"
 echo "  Pool:    $POOL"
+echo "  Backup:  $BACKUP"
 echo "  Wallet:  ${WALLET:0:12}...${WALLET: -6}"
 [[ -f "$DEST/machine.local" ]] && echo "  Overrides: machine.local"
 echo

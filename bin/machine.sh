@@ -21,7 +21,11 @@
 #   MODE=light         or fast | auto
 #   WORKER=minerv3-studio
 #   POOL=host:port     default gulf.moneroocean.stream:20016
-#   TLS=off            only for a pool port without TLS
+#   BACKUP=host:port   or off; default de.moneroocean.stream:20016 (same pool and balance, another
+#                      server). xmrig moves to it after 5 failed tries on POOL (~25 s) and back to
+#                      POOL as soon as it answers. Off by itself when POOL is not a MoneroOcean
+#                      server, so earnings never split across two pools.
+#   TLS=off            only for a pool port without TLS (applies to POOL and BACKUP)
 #   YIELD=on           let other apps have the CPU first (drops --cpu-no-yield; lower H/s)
 #   PAUSE=120          pause while the keyboard or mouse is in use, mine again after N s idle
 #                      (10-3600, default 120; off mines while you work: --pause-on-active)
@@ -34,8 +38,9 @@
 
 POOL_DEFAULT="gulf.moneroocean.stream:20016"
 POOL="$POOL_DEFAULT"
+BACKUP_DEFAULT="de.moneroocean.stream:20016"
 LABEL="com.minerv3.xmrig"
-SETTING_KEYS=(THREADS MODE WORKER POOL TLS YIELD PAUSE LAN)
+SETTING_KEYS=(THREADS MODE WORKER POOL BACKUP TLS YIELD PAUSE LAN)
 
 # True when VALUE is a valid machine.local setting for KEY.
 setting_ok() {
@@ -45,6 +50,7 @@ setting_ok() {
     MODE)    [[ "$v" == (fast|light|auto) ]] ;;
     WORKER)  [[ -n "$v" && "$v" != *[^A-Za-z0-9._-]* ]] ;;
     POOL)    [[ "$v" == *:<1-65535> && -n "${v%:*}" && "${v%:*}" != *[^A-Za-z0-9.-]* ]] ;;
+    BACKUP)  [[ "$v" == off ]] || setting_ok POOL "$v" ;;
     TLS|YIELD|LAN) [[ "$v" == (on|off) ]] ;;
     PAUSE)   [[ "$v" == off || "$v" == <10-3600> ]] ;;
     *) return 1 ;;
@@ -58,6 +64,7 @@ setting_help() {
     MODE)    print -r -- "MODE=fast | light | auto" ;;
     WORKER)  print -r -- "WORKER=<letters, digits, . _ ->" ;;
     POOL)    print -r -- "POOL=<host>:<port>" ;;
+    BACKUP)  print -r -- "BACKUP=<host>:<port> | off" ;;
     TLS)     print -r -- "TLS=on | off" ;;
     YIELD)   print -r -- "YIELD=on | off" ;;
     PAUSE)   print -r -- "PAUSE=<10-3600 seconds idle> | off" ;;
@@ -151,7 +158,7 @@ chip_slug() {
 }
 
 # Sets: ARCH CHIP CORES PHYS PCORE ECORE RAMGB L3 CORES_LABEL THREADS AUTO_THREADS THREADS_SPEC
-#       MODE MODE_SPEC RXINIT WORKER POOL TLS YIELD PAUSE LAN ROLE
+#       MODE MODE_SPEC RXINIT WORKER POOL BACKUP TLS YIELD PAUSE LAN ROLE
 machine_detect() {
   local root="$1"
   ARCH=$(uname -m)
@@ -191,13 +198,14 @@ machine_detect() {
   RXINIT=$CORES
   WORKER="minerv3-$(chip_slug "$CHIP")-${RAMGB}gb"
   POOL="$POOL_DEFAULT"
+  BACKUP="$BACKUP_DEFAULT"
   TLS="on"
   YIELD="off"
   PAUSE="120"
   LAN="on"
 
   # machine.local overrides (invalid lines are skipped; `minerctl config` lists them)
-  local f="$root/machine.local" line k v
+  local f="$root/machine.local" line k v backup_set=0
   if [[ -f "$f" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line%%#*}"
@@ -211,6 +219,7 @@ machine_detect() {
         MODE)    MODE_SPEC=$v; [[ "$v" != auto ]] && MODE=$v ;;
         WORKER)  WORKER=$v ;;
         POOL)    POOL=$v ;;
+        BACKUP)  BACKUP=$v; backup_set=1 ;;
         TLS)     TLS=$v ;;
         YIELD)   YIELD=$v ;;
         PAUSE)   PAUSE=$v ;;
@@ -218,6 +227,9 @@ machine_detect() {
       esac
     done < "$f"
   fi
+  # the default backup is a MoneroOcean server: behind another pool it would split the balance
+  (( ! backup_set )) && [[ "${POOL%:*}" != *moneroocean.stream ]] && BACKUP=off
+  [[ "$BACKUP" == "$POOL" ]] && BACKUP=off
   read_role "$root"
   return 0
 }
@@ -282,11 +294,20 @@ xmrig_has_arch() {
 
 # The launchd job for this Mac, from the values machine_detect + read_wallet set.
 render_job_file() {
-  local root="$1" logs="$1/logs" token_line="" tls_line="" yield_line="" pause_line=""
+  local root="$1" logs="$1/logs" token_line="" tls_line="" backup_lines="" yield_line="" pause_line=""
   if [[ -n "${FLEET_TOKEN:-}" ]]; then
     token_line=$'\n'"        <string>--http-access-token=$FLEET_TOKEN</string>"
   fi
   [[ "${TLS:-on}" == on ]] && tls_line=$'\n'"        <string>--tls</string>"
+  # Second pool: -u -p -a -k --tls after an -o belong to that pool only, so it repeats them.
+  # xmrig tries POOL 5 times, 5 s apart, then this one; POOL keeps retrying and wins back when it answers.
+  if [[ "${BACKUP:-off}" != off ]]; then
+    backup_lines=$'\n'"        <string>-o</string><string>$BACKUP</string>"
+    backup_lines+=$'\n'"        <string>-u</string><string>$WALLET.$WORKER</string>"
+    backup_lines+=$'\n'"        <string>-p</string><string>x</string>"
+    backup_lines+=$'\n'"        <string>-a</string><string>rx/0</string>"
+    backup_lines+=$'\n'"        <string>-k</string>$tls_line"
+  fi
   [[ "${YIELD:-off}" == off ]] && yield_line=$'\n'"        <string>--cpu-no-yield</string>"
   # xmrig polls the keyboard/mouse idle time twice a second; the dataset and pool stay up while paused
   [[ "${PAUSE:-off}" != off ]] && pause_line=$'\n'"        <string>--pause-on-active=$PAUSE</string>"
@@ -305,7 +326,7 @@ render_job_file() {
         <string>-u</string><string>$WALLET.$WORKER</string>
         <string>-p</string><string>x</string>
         <string>-a</string><string>rx/0</string>
-        <string>-k</string>$tls_line
+        <string>-k</string>$tls_line$backup_lines
         <string>--randomx-mode=$MODE</string>
         <string>--randomx-init=$RXINIT</string>
         <string>--cpu-priority=4</string>
@@ -366,6 +387,11 @@ machine_print() {
   echo "  Mode:    $MODE  ($msrc)"
   echo "  Worker:  $WORKER"
   echo "  Pool:    $POOL$([[ "$TLS" == on ]] && echo " (TLS)" || echo " (no TLS)")"
+  if [[ "$BACKUP" == off ]]; then
+    echo "  Backup:  off (one pool only)"
+  else
+    echo "  Backup:  $BACKUP (after 5 failed tries on the pool; back to the pool when it answers)"
+  fi
   echo "  Yield:   $YIELD$([[ "$YIELD" == on ]] && echo " (other apps first; lower H/s)" || echo " (--cpu-no-yield: xmrig keeps its cores)")"
   if [[ "$PAUSE" == off ]]; then
     echo "  Pause:   off (mines while you use this Mac)"
@@ -393,7 +419,7 @@ if [[ "${ZSH_EVAL_CONTEXT:-}" == "toplevel" ]]; then
   read_fleet_token "$_root"
   if [[ "${1:-}" == --env ]]; then
     # machine-readable, for bin/miner-ui.py
-    for _k in ARCH CORES PHYS L3 RAMGB AUTO_THREADS THREADS THREADS_SPEC MODE MODE_SPEC WORKER POOL TLS YIELD PAUSE LAN; do
+    for _k in ARCH CORES PHYS L3 RAMGB AUTO_THREADS THREADS THREADS_SPEC MODE MODE_SPEC WORKER POOL BACKUP TLS YIELD PAUSE LAN; do
       print -r -- "$_k=${(P)_k}"
     done
     exit 0

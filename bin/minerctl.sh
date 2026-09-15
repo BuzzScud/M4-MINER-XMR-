@@ -201,6 +201,7 @@ local_template() {
 # MODE=auto      fast (2 GB dataset, 8 GB+ RAM) | light (256 MB, much slower) | auto
 # WORKER=$WORKER
 # POOL=$POOL_DEFAULT
+# BACKUP=$BACKUP_DEFAULT   host:port | off: tried after 5 failures on POOL, dropped when POOL answers
 # TLS=on         off only for a pool port without TLS
 # YIELD=off      on: other apps get the CPU first (lower H/s)
 # PAUSE=120      pause while the keyboard or mouse is in use, mine after N s idle (10-3600) | off
