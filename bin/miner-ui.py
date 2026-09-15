@@ -102,6 +102,7 @@ COMMANDS = (
     Cmd("/open", "Open this folder in Finder", "open", "actions"),
     Cmd("/bench", "Offline thread sweep, ~10 min", "bench", "actions"),
     Cmd("/flex", "Pool picks the algo (or rx/0)", "flex", "actions"),
+    Cmd("/pause", "Pause while you use the Mac: on/off", "pause", "actions"),
     Cmd("/help", "List commands", "help", "ui"),
     Cmd("/quit", "Quit; the miner keeps running", "quit", "ui"),
 )
@@ -134,7 +135,7 @@ ALIASES = {
 }
 
 TABS = ("Usage", "Fleet", "Config", "Logs")
-TYPED = ("/perf", "/threads", "/set", "/unset")  # take arguments: /perf 4, /set MODE=light
+TYPED = ("/perf", "/threads", "/set", "/unset", "/pause")  # take arguments: /perf 4, /set MODE=light, /pause off
 PERF_DELAY = 1.5  # + / − while mining: presses gather this long, then one restart applies them
 
 
@@ -334,6 +335,11 @@ def typed_hint(buf: str) -> str:
         if len(p) > 1:
             return f"↵ threads → {p[1]}"
         return "↵ opens /config · or /perf up, down, max, eco, auto, 4, 75%"
+    if p[0] == "/pause":
+        if len(p) > 1:
+            v = pause_value(p[1])
+            return f"↵ PAUSE={v} and apply it" if v else "/pause on | off | 10-3600 (seconds idle before mining again)"
+        return "↵ switches it on/off · or /pause on, off, 300 (seconds idle)"
     if p[0] == "/set":
         return "↵ writes machine.local and applies it" if len(p) > 1 else "/set KEY=value … (THREADS MODE WORKER POOL TLS YIELD PAUSE LAN)"
     return "↵ back to automatic" if len(p) > 1 else "/unset KEY … (back to automatic)"
@@ -545,6 +551,14 @@ def pause_label(env: dict) -> str:
         return ""
     n = int(v)
     return f"{n // 60} min" if n % 60 == 0 else f"{n} s"
+
+
+def pause_value(arg: str) -> Optional[str]:
+    """/pause argument -> the PAUSE value machine.sh takes: on -> 120, off, 10-3600; None when invalid."""
+    a = arg.strip().lower()
+    if a in ("on", "off"):
+        return "120" if a == "on" else "off"
+    return a if a.isdigit() and 10 <= int(a) <= 3600 else None
 
 
 def braille_rows(vals: list, w: int, h: int, lo: float, hi: float) -> list[str]:
@@ -958,6 +972,9 @@ class App:
             return "running · will refuse" if state != "STOPPED" else "~10 min · mines nothing"
         if a == "flex":
             return "on · pool picks the algo" if os.path.isfile(os.path.join(ROOT, "flex.on")) else "off · rx/0 only"
+        if a == "pause":
+            idle = pause_label(self.env())
+            return f"on · {idle} idle" if idle else "off · mines while you work"
         if a == "quit":
             return "xmrig keeps running" if state != "STOPPED" else ""
         return ""
@@ -1995,7 +2012,7 @@ class App:
         self.ctl("perf", str(n))
 
     def run_typed(self, parts: list[str]) -> None:
-        """/perf N, /threads N, /set KEY=value …, /unset KEY … from the prompt or a /config key."""
+        """/perf N, /threads N, /set KEY=value …, /unset KEY …, /pause on|off|N from the prompt or a /config key."""
         self.add("user", text=" ".join(parts))
         if not self.dump:
             self.draw()
@@ -2005,6 +2022,12 @@ class App:
             self.ctl("perf", *rest[:1])
         elif head == "/set":
             self.ctl("config", "set", *rest)
+        elif head == "/pause":
+            v = pause_value(rest[0]) if rest else None
+            if v:
+                self.ctl("config", "set", f"PAUSE={v}")
+            else:
+                self.say("/pause on | off | 10-3600 (seconds without keyboard or mouse before mining again)")
         else:
             self.ctl("config", "unset", *rest)
 
@@ -2071,6 +2094,10 @@ class App:
             self.say("flex on. The next s lets the pool pick the algo (not always XMR).", "If it is running: t first, then s.")
         self.mode = "home"
 
+    def do_pause(self) -> None:
+        """/pause alone: pause-while-you-work on (120 s) or off, the same as p on /config."""
+        self.run_typed(["/pause", "off" if pause_label(self.env()) else "on"])
+
     def do_bench(self) -> None:
         if self.live()["state"] != "STOPPED":
             self.say("The miner is running. Press t, then /bench again.")
@@ -2115,6 +2142,8 @@ class App:
             self.do_open()
         elif action == "flex":
             self.do_flex()
+        elif action == "pause":
+            self.do_pause()
         elif action == "bench":
             self.add("user", text="/bench")
             self.mode = "confirm"
@@ -2656,12 +2685,12 @@ def self_test() -> int:
     p110 = [plain(ln) for ln in f110]
     check("resize 90→110 restores rail", len(f110) == 36 and {vis_len(ln) for ln in f110} == {110} and any("│  hashrate" in ln for ln in p110))
     pal = dump_frame("slash", strip=True)
-    check("palette groups + digits + status", " miner" in pal and " actions" in pal and " ui" in pal and "▎1 /usage" in pal and " 9 /help" in pal
+    check("palette groups + digits + status", " miner" in pal and " actions" in pal and " ui" in pal and "▎1 /usage" in pal and " 9 /pause" in pal and "   /help" in pal
           and "   /quit" in pal and "4,178 H/s · 1,945 ✓" in pal and "off · rx/0 only" in pal and "running · will refuse" in pal and "Type / for" not in pal)
     check("palette fleet status (compact beside the rail)", " 2 /fleet" in pal and "3/3 · 8,103 H/s" in pal)
     wide = dump_frame("slash", 147, 58, strip=True)  # the launcher size: a 109-col pane beside the rail
     check("palette fleet status (wide)", "3 of 3 mining · 8,103 H/s" in wide)
-    check("palette hints row", "1 of 10" in pal and "1–9 run" in pal)
+    check("palette hints row", "1 of 11" in pal and "1–9 run" in pal)
     pal2 = dump_frame("palette", strip=True)
     pal_rows = [ln for ln in pal2.split("\n") if "/usage" in ln or ln.strip() in ("miner", "actions", "ui", "recent")]
     check("palette filter is flat + selected", not any(ln.strip() in ("miner", "actions", "ui") for ln in pal2.split("\n")) and "▎1 /usage" in pal2 and "1 of 1" in pal2)
@@ -2734,6 +2763,25 @@ def self_test() -> int:
     a.mode = "overlay"; a.tab = TABS.index("Config")
     a.on_key_overlay("p")
     check("config p turns PAUSE on at 120", calls == [("config", "set", "PAUSE=120")])
+    a, calls = ctl_app("RUNNING")
+    for typed in ("/pause off", "/pause on", "/pause 300", "/pause 5", "/pause soon"):
+        a.buf = typed; a.on_key_home("enter")
+    check("typed /pause on|off|N, bad values write nothing",
+          calls == [("config", "set", "PAUSE=off"), ("config", "set", "PAUSE=120"), ("config", "set", "PAUSE=300")])
+    a, calls = ctl_app("RUNNING")
+    a.buf = "/pause"; a.on_key_home("enter")
+    check("/pause alone switches it off", calls == [("config", "set", "PAUSE=off")])
+    a, calls = ctl_app("RUNNING")
+    a.env_fixed = dict(a.env_fixed, PAUSE="off")
+    a.buf = "/pause"; a.on_key_home("enter")
+    check("/pause alone switches it on at 120", calls == [("config", "set", "PAUSE=120")])
+    pc = next(c for c in COMMANDS if c.action == "pause")
+    check("/pause status", a.cmd_status(pc, a.live()) == "off · mines while you work"
+          and ctl_app("RUNNING")[0].cmd_status(pc, a.live()) == "on · 2 min idle")
+    check("/pause hints", typed_hint("/pause 300") == "↵ PAUSE=300 and apply it" and "on | off" in typed_hint("/pause 5")
+          and "on/off" in typed_hint("/pause"))
+    check("pause_value", pause_value("ON") == "120" and pause_value("off") == "off" and pause_value("3600") == "3600"
+          and pause_value("9") is None and pause_value("2m") is None)
     a = demo_app("home")
     base = a.live()
     a.prev_paused = False
