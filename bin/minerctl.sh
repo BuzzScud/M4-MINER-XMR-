@@ -12,6 +12,9 @@
 #   branch); every other Mac is a follower that becomes that release when XMR Miner opens there
 #   (bin/miner-ui.sh runs `update --on-open`) and leaves xmrig stopped until you press s.
 set -uo pipefail
+# zsh runs `&` jobs at nice +5 (BG_NICE, on even in scripts), which put xmrig below every
+# other app. Off, it starts at nice 0; apply_nice can still only go lower with root.
+setopt no_bg_nice
 
 ROOT="${0:A:h:h}"
 XMRIG="$ROOT/bin/xmrig"
@@ -828,7 +831,11 @@ except Exception:
       cmd+=("--log-file=$LOGS/xmrig.log")
     fi
     cd "$ROOT" || exit 1
-    /usr/bin/caffeinate -i "${cmd[@]}" >>"$LOGS/xmrig.err.log" 2>&1 &
+    # Own session (setsid, via the system perl): otherwise xmrig shares the Terminal window's
+    # process group and closing that window SIGHUPs it. nohup can't help, xmrig traps SIGHUP.
+    # perl execs caffeinate in place, so $! is the same pid the pidfile always held.
+    /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec: $!\n"' \
+      /usr/bin/caffeinate -i "${cmd[@]}" >>"$LOGS/xmrig.err.log" 2>&1 &
     echo $! > "$PIDFILE"
     echo "Started. It takes about a minute to reach full speed."
     local i=0
