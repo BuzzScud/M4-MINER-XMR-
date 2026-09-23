@@ -1,0 +1,3 @@
+# XMR Miner: the main Mac's public key for fleet commands (bin/control.py). Safe to publish:
+# the private half stays on the main Mac, outside this folder.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ5K3NfC5TkaS1GdUhsg0PYS+Ynor81r+YGvKjPxTV/9 xmr-miner-main

@@ -10,6 +10,10 @@ Who gets polled: this Mac (127.0.0.1), the hosts in fleet.local (one host[:port]
 for Tailscale names or fixed IPs), and Macs a scan of this Mac's subnet found, remembered by
 worker name in logs/fleet.json so a new DHCP address is found again. GETs only; every API
 stays in xmrig's restricted mode (read-only, /1/config -> 403).
+
+Each other Mac's control helper (bin/control.py, :18089) is asked /v1/hello too: it answers while
+XMR Miner is open there or its miner runs, so a Mac with the miner stopped is still found, and the
+main Mac learns what it may send there (start / stop / restart).
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ from typing import Optional
 
 ROOT = os.environ.get("MINER_ROOT") or os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 PORT = 18088
+CTL_PORT = 18089  # bin/control.py's helper on every Mac but the main one
 LOCAL = "127.0.0.1"
 TOKEN_FILE = os.path.join(ROOT, "fleet.token")
 HOSTS_FILE = os.path.join(ROOT, "fleet.local")
@@ -206,6 +211,7 @@ def brief(d: dict) -> dict:
         "up": int(d.get("uptime") or 0),
         "pool": conn.get("pool") or "",
         "ping": conn.get("ping"),
+        "failures": conn.get("failures"),
         "cpu": (d.get("cpu") or {}).get("brand") or "",
         "version": d.get("version") or "",
         "algo": d.get("algo") or "",
@@ -217,6 +223,14 @@ def poll(host: str, port: int, token: str, timeout: float = 1.5) -> dict:
     ok = st == "ok" and isinstance(d, dict) and "hashrate" in d
     return {"host": host, "port": port, "status": "ok" if ok else (st if st != "ok" else "error"),
             "brief": brief(d) if ok else None, "at": time.time()}
+
+
+def hello(host: str, token: str, timeout: float = 1.5) -> tuple:
+    """(answer, status) from a Mac's control helper: worker, window open, xmrig running, what it takes."""
+    d, st = http_json(f"http://{host}:{CTL_PORT}/v1/hello", token, timeout)
+    if st == "ok" and isinstance(d, dict) and d.get("worker"):
+        return d, "ok"
+    return None, (st if st != "ok" else "error")
 
 
 def pool_workers(wallet: str, timeout: float = 6.0):
@@ -283,7 +297,8 @@ def subnet_hosts(ip: str, prefix: int) -> list[str]:
 
 
 def scan(token: str, port: int = PORT, connect_timeout: float = 0.35) -> list[dict]:
-    """Every host on this subnet whose :port answers like an xmrig API with our token."""
+    """Every host on this subnet whose :port answers like an xmrig API with our token, or whose
+    control helper (:18089) does: a Mac with XMR Miner open but its miner stopped."""
     me = own_ipv4()
     if not me:
         return []
@@ -292,7 +307,12 @@ def scan(token: str, port: int = PORT, connect_timeout: float = 0.35) -> list[di
         try:
             socket.create_connection((h, port), connect_timeout).close()
         except OSError:
-            return None
+            try:
+                socket.create_connection((h, CTL_PORT), connect_timeout).close()
+            except OSError:
+                return None
+            d, st = hello(h, token)
+            return {"host": h, "port": port, "status": "refused", "brief": None, "at": time.time(), "hello": d} if d else None
         r = poll(h, port, token)
         return r if r["status"] in ("ok", "auth") else None
 
@@ -333,6 +353,7 @@ class Fleet:
         self.me = local_worker()
         self.cache = load_cache()  # {"peers": {worker: {host, port, seen}}, "scanned": ts}
         self.lan: dict = {}
+        self.ctl: dict = {}  # host -> {"hello": answer or None, "status"}: the control helpers
         self.pool: dict = {}
         self.pool_status = "not yet"
         self.pool_at = 0.0
@@ -362,18 +383,26 @@ class Fleet:
         changed = False
         for r in results:
             b = r.get("brief")
-            if b and b["worker"] and r["host"] != LOCAL and b["worker"] != self.me:
-                peers[b["worker"]] = {"host": r["host"], "port": r["port"], "seen": int(r["at"])}
+            w = (b or {}).get("worker") or (r.get("hello") or {}).get("worker")
+            if w and r["host"] != LOCAL and w != self.me:
+                peers[w] = {"host": r["host"], "port": r["port"], "seen": int(r["at"])}
                 changed = True
         if changed:
             save_cache(self.cache)
 
     def refresh_lan(self) -> None:
         ts = self.targets()
-        with ThreadPoolExecutor(max(1, len(ts))) as ex:
-            res = list(ex.map(lambda t: dict(poll(t[0], t[1], self.token), src=t[2]), ts))
+        peers = [t for t in ts if t[0] != LOCAL] if self.token else []
+        with ThreadPoolExecutor(max(1, len(ts) + len(peers))) as ex:
+            polls = [ex.submit(lambda t: dict(poll(t[0], t[1], self.token), src=t[2]), t) for t in ts]
+            hellos = {t[0]: ex.submit(hello, t[0], self.token) for t in peers}
+            res = [f.result() for f in polls]
+            ctl = {h: f.result() for h, f in hellos.items()}
+        for r in res:
+            r["hello"] = (ctl.get(r["host"]) or (None, ""))[0]
         with self.lock:
             self.lan = {(r["host"], r["port"]): r for r in res}
+            self.ctl = {h: {"hello": d, "status": st} for h, (d, st) in ctl.items()}
             self.remember(res)
 
     def refresh_pool(self, force: bool = False) -> None:
@@ -419,22 +448,29 @@ class Fleet:
         with self.lock:
             lan, pool = list(self.lan.values()), dict(self.pool)
             peers = dict(self.cache.get("peers") or {})
+            ctl = dict(self.ctl)
         known = {(v.get("host"), int(v.get("port") or PORT)): w for w, v in peers.items()}
         rows: dict[str, dict] = {}
         for r in lan:
             here = r["host"] == LOCAL
             b = r.get("brief")
+            c = ctl.get(r["host"]) or {}
+            hi = c.get("hello")
             base = {"here": here, "host": r["host"], "via": "lan", "pool_hs": None, "lts": None, "pool_acc": None,
-                    "hs": None, "hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "note": ""}
+                    "hs": None, "hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "failures": None,
+                    "note": "", "ctl": hi, "ctl_st": c.get("status")}
             if b:
                 w = self.me if (here and self.me) else (b["worker"] or r["host"])
                 row = dict(base, worker=w, state=b["state"], hs=b["hs"], hs15=b["hs15"], acc=b["acc"],
-                           rej=b["rej"], up=b["up"], ping=b["ping"])
+                           rej=b["rej"], up=b["up"], ping=b["ping"], failures=b.get("failures"))
             else:
-                w = self.me if here else known.get((r["host"], r["port"]), r["host"])
+                w = self.me if here else ((hi or {}).get("worker") or known.get((r["host"], r["port"]), r["host"]))
                 state, note = DOWN_NOTE.get(r["status"], ("error", r["status"]))
                 if here and state == "stopped":
                     note = "not mining"
+                if hi:  # its helper answers: the Mac is awake; xmrig is stopped (or its API is still coming up)
+                    state = "starting" if hi.get("xmrig") else "stopped"
+                    note = "XMR Miner open there" if hi.get("window") else ""
                 row = dict(base, worker=w, state=state, note=note)
             prev = rows.get(w)
             if prev is None or (prev["state"] not in ACTIVE and row["state"] in ACTIVE):
@@ -444,12 +480,13 @@ class Fleet:
             row = rows.get(w)
             if row is None:
                 row = rows[w] = {"worker": w, "here": w == self.me, "host": "", "via": "pool", "hs": None,
-                                 "hs15": None, "acc": None, "rej": None, "up": None, "ping": None,
+                                 "hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "failures": None,
+                                 "ctl": None, "ctl_st": None,
                                  "state": "pool" if fresh else "idle",
                                  "note": "" if fresh else "no share for a while"}
                 if fresh and not row["here"]:
                     row["note"] = "not found on this LAN yet: update it (reopen XMR Miner there, then s)"
-            elif row["state"] not in ACTIVE and fresh and not row["here"]:
+            elif row["state"] not in ACTIVE and fresh and not row["here"] and not row.get("ctl"):
                 # the pool still gets its shares, so the Mac is mining; only the LAN view is missing
                 why = {"stopped": "its API is local-only: update it (reopen XMR Miner there, then s)",
                        "no token": row["note"]}.get(row["state"], "mining, but not reachable from here")
@@ -473,6 +510,7 @@ class Watcher:
         self.fleet = Fleet()
         self.snap: Optional[tuple[list, dict]] = None
         self._stop = threading.Event()
+        self._wake = threading.Event()
         self._t = threading.Thread(target=self._run, name="fleet", daemon=True)
         if start:
             self._t.start()
@@ -485,13 +523,19 @@ class Watcher:
                 self.snap = (rows, self.fleet.meta(rows))
             except Exception:
                 pass
-            self._stop.wait(LAN_EVERY)
+            self._wake.wait(LAN_EVERY)
+            self._wake.clear()
 
     def latest(self) -> Optional[tuple[list, dict]]:
         return self.snap
 
+    def poke(self) -> None:
+        """Poll again now (after a start or stop), not in up to 5 s."""
+        self._wake.set()
+
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
 
 
 # ---------------------------------------------------------------------- CLI
@@ -585,7 +629,8 @@ def do_scan_cli() -> int:
     found = f.do_scan()
     for r in found:
         b = r.get("brief") or {}
-        print(f"  {r['host']:<15} {b.get('worker') or '(token rejected)':<24} {fmt_hs(b.get('hs'))} H/s")
+        w = b.get("worker") or (r.get("hello") or {}).get("worker") or "(token rejected)"
+        print(f"  {r['host']:<15} {w:<24} " + (f"{fmt_hs(b.get('hs'))} H/s" if b else "miner stopped · XMR Miner helper answers"))
     print(f"{len(found)} found in {time.time() - t0:.1f} s; remembered in logs/fleet.json")
     return 0
 
@@ -607,7 +652,7 @@ def self_test() -> int:
          "connection": {"pool": "gulf.moneroocean.stream:20016", "accepted": 50, "rejected": 1, "ping": 90}}
     b = brief(s)
     check("brief", b["worker"] == "minerv3-m2-8gb" and b["hs"] == 3200.5 and b["hs15"] is None and b["acc"] == 50
-          and b["rej"] == 1 and b["state"] == "mining")
+          and b["rej"] == 1 and b["state"] == "mining" and b["failures"] is None)
     check("brief starting", brief({"hashrate": {"total": [None, None, None]}})["state"] == "starting")
     check("subnet /24", len(subnet_hosts("192.168.1.55", 24)) == 253 and "192.168.1.55" not in subnet_hosts("192.168.1.55", 24))
     check("subnet clamps to /22", len(subnet_hosts("10.1.2.3", 16)) == 1021)
@@ -644,6 +689,13 @@ def self_test() -> int:
     f.lan[(LOCAL, PORT)] = {"host": LOCAL, "port": PORT, "status": "refused", "at": now, "brief": None}
     r4 = {r["worker"]: r for r in f.rows(now)}["minerv3-m4-16gb"]
     check("this Mac stopped", r4["state"] == "stopped" and r4["note"] == "not mining" and r4["here"])
+    f.lan[("10.0.0.2", PORT)] = {"host": "10.0.0.2", "port": PORT, "status": "refused", "at": now, "brief": None}
+    f.pool["minerv3-m2-8gb"] = {"hs": 0.0, "lts": int(now - 4000)}
+    f.ctl = {"10.0.0.2": {"hello": {"worker": "minerv3-m2-8gb", "window": True, "xmrig": False, "can": ["start", "stop", "restart"]}, "status": "ok"}}
+    r5 = {r["worker"]: r for r in f.rows(now)}["minerv3-m2-8gb"]
+    check("miner stopped, helper answers = stopped + window open", r5["state"] == "stopped" and r5["ctl"]["window"]
+          and r5["note"] == "XMR Miner open there" and r5["host"] == "10.0.0.2")
+    f.ctl = {}
     t = table(f.rows(now), f.meta(f.rows(now)))
     check("table", t[0].startswith("Fleet · ") and any("minerv3-i7-6700hq-16gb" in ln for ln in t) and "\033" not in "".join(t))
     check("rows: pool share count", by["minerv3-m4-16gb"]["pool_acc"] is None and by["old-rig"]["pool_acc"] is None)

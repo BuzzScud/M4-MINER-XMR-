@@ -2,12 +2,14 @@
 # Control helper. Starts xmrig from this process (not launchd).
 # launchd cannot run binaries under Desktop (TCC hang: 0% CPU, empty logs).
 # Subcommands: status | start | stop | kill | restart | nice | job | perf [...] | config [...]
-#              | bench [...] | fleet [...] | update | release | role | help
+#              | bench [...] | fleet [...] | remote [...] | events [...] | update | release | role | help
 # The job file is rendered for THIS Mac at every start (bin/machine.sh).
 # perf / config: change threads and the other machine.local settings; applies now
 #   (restarts xmrig if it is running, without a Desktop summary).
 # bench: offline thread sweep (bin/xmr_bench_sweep.sh); refuses while mining.
 # fleet: every Mac's miner at once (bin/fleet.py; `fleet here` checks this Mac).
+# remote / events: the main Mac starts and stops the others (bin/control.py, signed commands);
+#   every start and stop lands in logs/events.jsonl with why ($MINER_WHY) and who asked ($MINER_BY).
 # release / update / role: one main Mac releases (commit, then push main and GitHub's stable
 #   branch); every other Mac is a follower that becomes that release when XMR Miner opens there
 #   (bin/miner-ui.sh runs `update --on-open`) and leaves xmrig stopped until you press s.
@@ -63,6 +65,12 @@ is_up() {
 }
 
 NICE_TARGET=-10
+
+# One line in logs/events.jsonl: start / stop, why (window, remote, cli, restart, settings, update)
+# and who asked. Never fails the command it describes.
+note() {
+  python3 "$ROOT/bin/control.py" note "$@" >/dev/null 2>&1 || true
+}
 
 current_nice() {
   local p
@@ -144,7 +152,9 @@ apply_settings() {
     return 0
   fi
   echo "Restarting xmrig with $THREADS threads, $MODE mode..."
+  api_curl "$API" --max-time 2 | note stop --why settings --api-stdin
   kill_all
+  export MINER_WHY=settings
   exec "$ROOT/bin/minerctl.sh" start
 }
 
@@ -329,7 +339,7 @@ follower_sync() {
   [[ -n $incoming ]] && print -r -- "$incoming"
   if is_up; then
     was_up=1
-    if ! "$ROOT/bin/minerctl.sh" stop; then
+    if ! MINER_WHY=update "$ROOT/bin/minerctl.sh" stop; then
       echo "ERROR: could not stop xmrig; nothing changed."
       (( on_open )) && update_notice fail "could not stop xmrig for the update"
       return 1
@@ -377,7 +387,8 @@ release_checks() {
   done
   python3 "$ROOT/bin/miner-ui.py" --self-test >/dev/null 2>&1 || { echo "    FAIL python3 bin/miner-ui.py --self-test"; bad=1; }
   python3 "$ROOT/bin/fleet.py" --self-test >/dev/null 2>&1 || { echo "    FAIL python3 bin/fleet.py --self-test"; bad=1; }
-  (( bad )) || echo "    ok: every script parses; the UI and fleet self-tests pass"
+  python3 "$ROOT/bin/control.py" --self-test >/dev/null 2>&1 || { echo "    FAIL python3 bin/control.py --self-test"; bad=1; }
+  (( bad )) || echo "    ok: every script parses; the UI, fleet and control self-tests pass"
   return $bad
 }
 
@@ -658,7 +669,9 @@ print(f"Pool: {pool}")
 
   restart)
     if ! is_up; then echo "Not running."; exit 1; fi
+    api_curl "$API" --max-time 2 | note stop --why restart --by "${MINER_BY:-}" --api-stdin
     kill_all
+    export MINER_WHY=restart
     exec "$ROOT/bin/minerctl.sh" start
     ;;
 
@@ -684,6 +697,9 @@ Usage: ./bin/minerctl.sh <command>
   job                render the job file and print this Mac's profile
   nice               try nice -10 on xmrig
   fleet [...]        every Mac on this wallet
+  remote start|stop|restart <mac|all>   main Mac: start or stop another Mac (m2, i7, all …)
+  remote setup       main Mac: make the signing key (then release, so the others get control.pub)
+  events [-n N] [--here] [--all]        timed log: pool errors, rejected shares, starts, stops
   release ["msg"]    main Mac: commit everything here, push, release it to the others (--yes: no prompt)
   update             follower: become the latest release now (opening XMR Miner does it too); miner left stopped
                      main: fast-forward main from GitHub, reinstall, restart if it was running
@@ -695,6 +711,20 @@ EOF
     # Every Mac at once: LAN API (token) + the pool's per-worker view. Read-only.
     shift
     exec python3 "$ROOT/bin/fleet.py" "$@"
+    ;;
+
+  remote)
+    # The main Mac starts / stops / restarts another Mac through that Mac's control helper.
+    shift
+    if [[ "${1:-}" == setup ]]; then
+      exec python3 "$ROOT/bin/control.py" keygen "${@:2}"
+    fi
+    exec python3 "$ROOT/bin/control.py" send "$@"
+    ;;
+
+  events)
+    shift
+    exec python3 "$ROOT/bin/control.py" events "$@"
     ;;
 
   update)
@@ -737,7 +767,7 @@ EOF
     was_up=0
     if is_up; then
       was_up=1
-      "$ROOT/bin/minerctl.sh" stop || exit 1
+      MINER_WHY=update "$ROOT/bin/minerctl.sh" stop || exit 1
     fi
     "${G[@]}" checkout -- "${GENERATED[@]}"
     if ! "${G[@]}" merge --ff-only --quiet '@{u}'; then
@@ -746,6 +776,7 @@ EOF
     fi
     "$ROOT/install.sh" --yes || exit 1
     if (( was_up )); then
+      export MINER_WHY=update
       exec "$ROOT/bin/minerctl.sh" start
     fi
     ;;
@@ -843,6 +874,10 @@ except Exception:
       /usr/bin/caffeinate -i "${cmd[@]}" >>"$LOGS/xmrig.err.log" 2>&1 &
     echo $! > "$PIDFILE"
     echo "Started. It takes about a minute to reach full speed."
+    note start --why "${MINER_WHY:-cli}" --by "${MINER_BY:-}"
+    # This Mac's control helper (not on the main Mac): while xmrig runs, the main Mac can stop it
+    # even after the window closes. Detached, so the start does not wait for it.
+    python3 "$ROOT/bin/control.py" ensure >/dev/null 2>&1 &!
     local i=0
     while [[ -z $(xmrig_pids) ]] && (( i < 25 )); do
       sleep 0.1
@@ -864,6 +899,11 @@ except Exception:
     if is_up; then
       echo "ERROR: xmrig still running after stop."
       exit 1
+    fi
+    if [[ -n $J ]]; then
+      print -r -- "$J" | note stop --why "${MINER_WHY:-cli}" --by "${MINER_BY:-}" --api-stdin
+    else
+      note stop --why "${MINER_WHY:-cli}" --by "${MINER_BY:-}"
     fi
     echo "Stopped."
     ;;

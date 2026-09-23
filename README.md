@@ -11,10 +11,12 @@ Home: wherever this folder lives (this M4: `/Users/christiantavarez/Desktop/PROJ
 ```
 bin/                 xmrig (universal arm64 + x86_64, 6.26.0), machine.sh (chip/threads/mode/worker + the job file),
                      miner-ui.py (the Terminal UI), minerctl.sh (start/stop/status/job/fleet), fleet.py (every Mac
-                     at once: LAN API + pool), write-session-summary.py,
+                     at once: LAN API + pool), control.py (start/stop the other Macs + the timed event log),
+                     write-session-summary.py,
                      xmr_bench_sweep.sh, the dock launcher's AppleScript and icon
 XMR Miner.app/       dock launcher: opens Terminal at 147×58 with the UI; never starts mining by itself
-logs/                xmrig.log / xmrig.err.log (from --log-file), last-session.json, the pid file   (local only)
+logs/                xmrig.log / xmrig.err.log (from --log-file), last-session.json, the pid file,
+                     events.jsonl (every start / stop, who asked), fleet-events.jsonl (main Mac)   (local only)
 docs/setup/          Setup Instructions (html)
 docs/randomx/        how RandomX is made, the mining audit, the M4 tune plan, Two Proofs of Work
 docs/designs/        the interactive TUI mockup pages the screen was chosen from
@@ -26,6 +28,7 @@ com.minerv3.xmrig.plist(.example)   the job file, rendered per Mac at install an
 machine.local        optional tuning overrides for this Mac: THREADS= / MODE= / WORKER= / LAN=off (gitignored)
 fleet.token          the API access token every Mac shares (tracked, like wallet.local; see Fleet)
 fleet.local          optional extra hosts for the fleet view, one host[:port] per line (gitignored)
+control.pub          the main Mac's public key: the other Macs take start/stop only when it signed them (tracked)
 vendor/              local xmrig source checkout (gitignored); XMR-Miner-Portable.zip, bin/xmrig.* extras (gitignored)
 ```
 
@@ -70,6 +73,8 @@ cd "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"
 ./bin/minerctl.sh fleet    # every Mac on this wallet (add --watch, --json, -v for addresses)
 ./bin/minerctl.sh fleet here   # on any Mac: can the others see this one? (bind, token, LAN, firewall)
 ./bin/minerctl.sh fleet scan   # look for miners on this subnet now
+./bin/minerctl.sh remote stop m2       # main Mac: stop / start / restart another Mac (m2, i7, all)
+./bin/minerctl.sh events       # timed log: pool errors, rejected shares, starts and stops (-n 100, --here)
 ./bin/minerctl.sh release "what changed"   # main Mac: commit, push, release to the other Macs (see Releases)
 ./bin/minerctl.sh update   # follower: become the latest release now (opening the app does it); miner left stopped
 ./bin/minerctl.sh role     # main or follower (see Releases)
@@ -150,14 +155,17 @@ second copy if a leftover xmrig is still on :18088 — it attaches instead; `t` 
 s            start (immediate)
 t            stop (writes a summary txt to Desktop)
 q / ⌃C       quit UI (does not stop a running miner)
-/            command palette: grouped (recent · miner · actions · ui), ↑↓ pick, 1–9 run,
+/            command palette: grouped (recent · miner · actions · fleet · ui), ↑↓ pick, 1–9 run,
              tab complete, ↵ run, esc close; each row shows what it would find right now
 /usage       card: hashrate, windows, shares, cadence, threads, dataset, pool, machine, uptime
-/fleet       card: every Mac on this wallet: state, H/s, shares, uptime, LAN or pool (also /macs)
+/fleet       card: every Mac on this wallet: state, H/s, shares, uptime, LAN or pool (also /macs);
+             ↑↓ picks a Mac, s / t / r start, stop, restart it (stop and restart ask y / n)
+/start m2    start another Mac (main Mac only); /stop m2, /restart m2, /stop all; bare /start = this Mac
+/events      timed log of every Mac: pool errors, backup pool, rejected shares, starts, stops, pauses
 /config      card: threads, mode, yield, pool, worker, flex, overrides; + − a x o m y e change them
 + / −        one thread more / fewer (restarts xmrig if it is mining)
 /perf N      threads: N, up, down, max, eco, auto, 75%      /set KEY=value …   /unset KEY …
-/logs        tail -n 20 of xmrig.log (e switches to the error log)
+/logs        tail -n 20 of xmrig.log (e steps: xmrig.log → error log → events)
 /err         tail -n 20 of xmrig.err.log
 /open        this folder in Finder
 /bench       thread sweep (offline, never starts mining; asks for "yes"; refuses while mining)
@@ -167,7 +175,8 @@ q / ⌃C       quit UI (does not stop a running miner)
 esc          close palette / card
 ```
 
-Checks that touch no miner: `python3 bin/miner-ui.py --self-test` and
+Checks that touch no miner: `python3 bin/miner-ui.py --self-test`, `python3 bin/fleet.py --self-test`,
+`python3 bin/control.py --self-test` (signing, a live helper on a spare port with a stub minerctl), and
 `python3 bin/miner-ui.py --dump home|home-stopped|home-starting|slash|usage|config|logs|confirm [cols rows] [--plain]`.
 
 If the dock icon is a question mark, drag `XMR Miner.app` from this folder onto the dock.
@@ -205,6 +214,52 @@ answer: asleep, off, away), `no token` (its `fleet.token` differs), `idle` (the 
   and press **s**. Rotate it if the repo ever goes public.
 - Because it is xmrig's own API, XMRig dashboards and monitors that take a URL plus an access token work as well.
 
+## Start and stop the other Macs (from the main Mac)
+
+The main Mac (this M4) can start, stop and restart the others: `/fleet`, pick a Mac with ↑↓, then `s` / `t` / `r`;
+or type `/stop m2`, `/start i7`, `/restart all`; or `./bin/minerctl.sh remote stop m2` in Terminal. Stop and restart
+ask y / n first. The line in the ledger says what happened and when (`Stopped m2-8gb from this Mac · 18:52:04`, with
+that Mac's shares), and that Mac's own window says `from m4-16gb`.
+
+How it works:
+
+- Every Mac except the main one runs a small helper (`bin/control.py`, port 18089) while **XMR Miner is open** there.
+  A command goes through that window, exactly like pressing `s` or `t` in it.
+- When the window is **closed** but the miner keeps running, the helper stays up for as long as xmrig runs, so the
+  main Mac can still **stop** it. **Starting needs the window** open on that Mac. With no window and no miner, the
+  helper exits and nothing listens.
+- Only the main Mac can send commands. It signs each one with a key that never leaves it
+  (`~/Library/Application Support/XMR Miner/control.key`; made by `./bin/minerctl.sh remote setup`). The others
+  check the signature against `control.pub` from the repo and refuse a command that is over a minute old, one they
+  have seen before, or one meant for another Mac. Refusals land in the event log. Reads (hello, events) want
+  `fleet.token`, like xmrig's API; xmrig's own API stays read-only.
+- The fleet card says what the main Mac can do to each Mac: `XMR Miner open there · s start · t stop · r restart`,
+  `window closed there · t stops it`, or why not (`can't reach it`, `no helper there yet: reopen XMR Miner on it once`).
+  A Mac with XMR Miner open and its miner stopped shows as `stopped` instead of `offline`.
+- New key (lost or rotated): `./bin/minerctl.sh remote setup --force`, release, reopen XMR Miner on every Mac.
+- The helper needs the fleet on the LAN: `LAN=off` in `machine.local` keeps a Mac out of it (no helper there).
+  With the macOS firewall on, allow incoming connections for python3 once when macOS asks.
+
+## Event log (times for everything)
+
+Every ledger line carries its time (18:52:04 today, 09-22 08:35:08 on an earlier day). Each rejected share gets its own
+line with the pool's reason, each pool error its own line (an outage of many retries is one line: `×12 · until …`),
+and a switch to the backup pool and back is a line too. `/events` (or `e` on the Logs card) lists them for every Mac:
+
+```
+09-22 01:02:47  m4-16gb   ✗ Share rejected #722 · "Throttled down share submission (please increase difficulty)"
+      18:40:02  m2-8gb    ⚠ Pool connect error: "connection timed out" ×6 · until 18:40:27
+      18:40:28  m2-8gb    ⇄ Switched to the backup pool · de.moneroocean.stream:20016
+      18:52:04  m2-8gb    ■ Stopped from m4-16gb · after 5h 2m · 812 ✓ · 0 ✗
+```
+
+Exact times come from each Mac's own `xmrig.log` plus `logs/events.jsonl`, where minerctl notes every start and stop
+with why and who asked (the window, the main Mac, Terminal, a restart, an update). A run that ends with no stop
+note (the Mac shut down or slept, a crash) gets `xmrig ended with no stop recorded`. The main Mac collects every Mac's
+events every 20 s into `logs/fleet-events.jsonl`, so the history stays after the windows close. A Mac without the
+helper yet is counted from its xmrig numbers instead (`≈ 2 shares rejected`, the time of the poll). The other Macs'
+problems, starts and stops also get a line in the main Mac's ledger as they happen.
+
 ## Other Macs / re-install
 
 Clone the repo or copy the folder, then once per Mac:
@@ -227,7 +282,7 @@ One Mac is the **main Mac** (this M4); the others are **followers**. Changes are
 ```
 
 It lists what goes out (uncommitted files, and commits the followers do not have yet), runs the checks every follower
-depends on (each script parses, the UI and fleet self-tests pass), asks once (`--yes` skips that), commits everything,
+depends on (each script parses, the UI, fleet and control self-tests pass), asks once (`--yes` skips that), commits everything,
 and pushes `main` and the `stable` branch to GitHub in one atomic push. `stable` is the release: a push to `main`
 alone reaches no one.
 

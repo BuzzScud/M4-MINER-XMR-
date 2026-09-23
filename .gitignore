@@ -29,3 +29,19 @@ logs/fleet.json.tmp
 # minerctl update: what the last update did, shown once by the UI's next window
 logs/update-notice.json
 logs/update-notice.json.tmp
+
+# fleet control (bin/control.py): timed event logs, the helper's state, the window's inbox
+logs/events.jsonl
+logs/fleet-events.jsonl
+logs/fleet-events.jsonl.tmp
+logs/control.pid
+logs/control.lock/
+logs/control-seen.json
+logs/control.allowed_signers
+logs/control-inbox/
+logs/ui.pid
+logs/*.sig
+logs/*.tmp
+# the signing key lives outside this folder (~/Library/Application Support/XMR Miner); never commit one
+control.key
+control.key.pub
