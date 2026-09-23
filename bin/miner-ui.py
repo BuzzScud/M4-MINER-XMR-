@@ -2107,16 +2107,18 @@ class App:
         lines = [ln for ln in out.splitlines() if ln.strip()]
         nice = next((ln.strip() for ln in lines if ln.startswith("Nice:")), "")
         cmd = self.live_cache[1]["job"].get("cmdline") if self.live_cache else ""
-        if live["state"] in ("RUNNING", "STARTING") and lines and lines[0].startswith("Already running"):
+        # the verdict line wherever it is: a stray line before it once made a good start look failed
+        head = next((ln for ln in lines if ln.startswith(("Started", "Already running"))), lines[0] if lines else "")
+        if live["state"] in ("RUNNING", "STARTING") and head.startswith("Already running"):
             msg = f"Already mining ({fmt_uptime(live.get('up') or 0)}). t stops it."
             self.say(msg, nice) if nice else self.say(msg)
             self.nice_cache = None
             self.mode = "home"
             return True, [msg]
         ok = True
-        if lines and lines[0].startswith("Started"):
+        if head.startswith("Started"):
             self.note_started(nice, by=by)
-        elif lines and lines[0].startswith("Already running"):
+        elif head.startswith("Already running"):
             # leftover from a previous window (q does not stop xmrig). Attach; do not spawn.
             api = api_summary()
             up = int((api or {}).get("uptime") or 0)
@@ -3397,6 +3399,16 @@ def self_test() -> int:
         control.set_root(old_root)
         import shutil as _sh
         _sh.rmtree(td, ignore_errors=True)
+    d = demo_app("home-stopped")
+    d.fixed_live = _demo_live("STOPPED")
+    import types
+    real_co = subprocess.check_output
+    try:
+        subprocess.check_output = lambda *a, **k: "a=$'--log-file=/x/logs/xmrig.log\\n'\nStarted. It takes about a minute to reach full speed.\nNice: 0\n"  # type: ignore
+        okd, _ = d.do_start()
+    finally:
+        subprocess.check_output = real_co  # type: ignore
+    check("a stray line before Started. is still a start", okd and any(e["k"] == "start" for e in d.events) and not any(e["k"] == "out" for e in d.events))
     check("typed hints for the fleet", typed_hint("/stop m2") == "↵ stop m2 (asks first)" and typed_hint("/start") == "↵ start this Mac · or /start m2, /start all")
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
     return 0 if fails == 0 else 1

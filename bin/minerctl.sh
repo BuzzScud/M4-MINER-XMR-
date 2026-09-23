@@ -850,6 +850,7 @@ except Exception:
     mkdir -p "$LOGS"
     : >>"$LOGS/xmrig.log" >>"$LOGS/xmrig.err.log"
     local -a cmd
+    local a=""  # declared before use: `local` on a name that is already set prints it (zsh)
     cmd=()
     while IFS= read -r -d '' a; do cmd+="$a"; done < <(args_from_plist)
     if (( ${#cmd} == 0 )); then
@@ -859,7 +860,7 @@ except Exception:
     # --log-file is the only writer of xmrig.log. Console stdout used to be
     # redirected onto the same path; FileLogWriter then overwrote it from
     # offset 0 and the file stayed empty.
-    local has_log=0 a
+    local has_log=0
     for a in "${cmd[@]}"; do
       [[ "$a" == --log-file=* || "$a" == -l ]] && has_log=1
     done
