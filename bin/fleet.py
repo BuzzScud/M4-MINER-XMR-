@@ -45,10 +45,12 @@ CACHE = os.path.join(ROOT, "logs", "fleet.json")
 POOL_API = "https://api.moneroocean.stream/miner/{wallet}/stats/allWorkers"
 STATS_API = "https://api.moneroocean.stream/miner/{wallet}/stats"  # amtDue / amtPaid for the wallet
 USER_API = "https://api.moneroocean.stream/user/{wallet}"          # payout_threshold
+CHART_API = "https://api.moneroocean.stream/miner/{wallet}/chart/hashrate/allWorkers"  # per-worker H/s history
 PICO = 1e12  # atomic units per XMR
 
 LAN_EVERY = 5.0      # s between LAN polls in the watcher
 POOL_EVERY = 60.0    # the pool's numbers move about once a minute
+CHART_EVERY = 300.0  # the hashrate history (for uptime over 24 h): ~65 KB, points every 6-18 min
 SCAN_EVERY = 300.0   # rescan at most this often, and only when a pool worker has no LAN address
 STALE_SHARE = 600    # pool: no share for 10 min and 0 H/s -> idle
 
@@ -249,6 +251,26 @@ def pool_workers(wallet: str, timeout: float = 6.0):
     return out, "ok"
 
 
+def uptime_24h(chart: dict, now: Optional[float] = None) -> dict:
+    """{worker: share of the last 24 h with H/s > 0} from the pool's allWorkers chart. Each point
+    stands for the time until the next one, at most 30 min (a longer gap is time off)."""
+    now = now or time.time()
+    lo = now - 86400
+    out = {}
+    for w, pts in (chart or {}).items():
+        if w == "global" or not isinstance(pts, list):
+            continue
+        ps = sorted((float(p.get("ts") or 0) / 1000.0, float(p.get("hs") or 0)) for p in pts if isinstance(p, dict))
+        on = 0.0
+        for i, (t, hs) in enumerate(ps):
+            end = min(ps[i + 1][0] if i + 1 < len(ps) else now, t + 1800, now)
+            a, b = max(t, lo), end
+            if hs > 0 and b > a:
+                on += b - a
+        out[w] = min(1.0, on / 86400)
+    return out
+
+
 def parse_balance(stats: dict, user: Optional[dict]) -> dict:
     """XMR owed and paid from /miner/<wallet>/stats, plus the payout threshold from /user/<wallet>."""
     thr = (user or {}).get("payout_threshold")
@@ -358,6 +380,8 @@ class Fleet:
         self.pool_status = "not yet"
         self.pool_at = 0.0
         self.balance: Optional[dict] = None
+        self.up24: Optional[dict] = None  # {worker: 0..1}; None until the first chart
+        self.chart_at = 0.0
         self.scan_at = float(self.cache.get("scanned") or 0)
         self.last_scan: list = []
         self.lock = threading.Lock()
@@ -410,12 +434,19 @@ class Fleet:
             return
         d, st = pool_workers(self.wallet)
         bal, bst = pool_balance(self.wallet)
+        up = None
+        if self.wallet and time.time() - self.chart_at >= CHART_EVERY:
+            c, cst = http_json(CHART_API.format(wallet=self.wallet), "", 10.0)
+            if cst == "ok" and isinstance(c, dict):
+                up = uptime_24h(c)
         with self.lock:
             self.pool_at, self.pool_status = time.time(), st
             if st == "ok":
                 self.pool = d
             if bst == "ok":
                 self.balance = bal
+            if up is not None:
+                self.up24, self.chart_at = up, time.time()
 
     def want_scan(self) -> bool:
         if not self.token or time.time() - self.scan_at < SCAN_EVERY:
@@ -492,6 +523,10 @@ class Fleet:
                        "no token": row["note"]}.get(row["state"], "mining, but not reachable from here")
                 row.update(state="pool", note=why)
             row["pool_hs"], row["lts"], row["pool_acc"] = p["hs"], p["lts"], p.get("valid")
+        up24 = self.up24
+        for w, row in rows.items():
+            row["up24"] = None if up24 is None else up24.get(w, 0.0)
+            row["seen"] = None if row["here"] else (peers.get(w) or {}).get("seen")
         return sorted(rows.values(), key=lambda r: (not r["here"], -eff_hs(r), r["worker"]))
 
     def meta(self, rows: list[dict]) -> dict:
@@ -703,6 +738,18 @@ def self_test() -> int:
     check("balance", abs(bal["due"] - 0.001715517028) < 1e-12 and bal["paid"] == 0 and bal["threshold"] == 0.3)
     check("balance without threshold", parse_balance({"amtDue": 5}, None)["threshold"] is None)
     check("age", age(now - 30, now) == "30s" and age(now - 600, now) == "10m" and age(None) == "—")
+    ms = lambda t: int(t * 1000)  # noqa: E731
+    chart = {"global": [], "m2": [{"ts": ms(now - 86400 + i * 360), "hs": 3300} for i in range(240)],
+             "m4": [{"ts": ms(now - 3600 * 6 + i * 360), "hs": 4200 if i < 30 else 0} for i in range(60)],
+             "gap": [{"ts": ms(now - 7200), "hs": 1000}, {"ts": ms(now - 60), "hs": 1000}]}
+    u = uptime_24h(chart, now)
+    check("uptime 24 h: always on ≈ 100%", abs(u["m2"] - 1.0) < 0.01)
+    check("uptime 24 h: 3 of 24 h on", abs(u["m4"] - 3 / 24) < 0.01)
+    check("uptime 24 h: a gap over 30 min is time off", abs(u["gap"] - (1800 + 60) / 86400) < 0.001 and "global" not in u)
+    f.up24 = {"minerv3-m2-8gb": 0.5}
+    rr = {r["worker"]: r for r in f.rows(now)}
+    check("rows carry up24 (0 for a Mac missing from the chart) and when a peer was last seen",
+          rr["minerv3-m2-8gb"]["up24"] == 0.5 and rr["minerv3-i7-6700hq-16gb"]["up24"] == 0.0)
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
     return 0 if fails == 0 else 1
 

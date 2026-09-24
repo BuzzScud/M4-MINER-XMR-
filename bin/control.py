@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Fleet control: the main Mac starts and stops the others; every Mac keeps a timed event log.
 
-The helper (`control.py serve`, port 18089) runs on every Mac except the main one:
-  - while XMR Miner's window is open there, start / stop / restart go through the window,
-    exactly like pressing s or t in it, so its ledger says what happened and who asked;
-  - after the window closes, for as long as xmrig runs, it can still stop the miner
-    (starting needs the window); then it exits.
+The helper, or keeper (`control.py serve`, port 18089), runs on every Mac while XMR Miner is open,
+while xmrig runs, or while the Mac has mining hours (HOURS in machine.local):
+  - it takes the main Mac's commands (not on the main Mac itself, where it listens on 127.0.0.1 only);
+    while XMR Miner's window is open, start / stop / restart go through the window, exactly like
+    pressing s or t in it; after the window closes it can still stop the miner (starting needs
+    the window);
+  - it follows the hours: starts xmrig when they begin, stops it when they end; a stop you make
+    inside the hours holds until the next start; XMR Miner opens at login on a Mac with hours;
+  - the watchdog restarts a miner that died with no stop recorded (3 times an hour at most).
 Only the main Mac can send commands. It signs each one with a key that never leaves it
 (~/Library/Application Support/XMR Miner/control.key, `ssh-keygen -Y sign`); the others check
 the signature against control.pub from the repo and refuse a command that is over a minute old,
@@ -42,7 +46,15 @@ import fleet  # bin/fleet.py: token, worker name, HTTP helpers, the fleet rows
 PORT = 18089
 NS = "xmr-miner-control"   # ssh-keygen signature namespace: a signature for anything else never verifies
 SIGNER = "main"
-CMDS = ("start", "stop", "restart")
+CMDS = ("start", "stop", "restart", "hours")
+RUN_CMDS = ("start", "stop", "restart")   # the ones that need the window (start) or a running miner (stop)
+MANUAL = ("window", "cli", "remote")      # a stop with one of these reasons holds the hours until their next start
+SCHED_EVERY = 10.0         # s between schedule / watchdog checks
+CRASH_GRACE = 20.0         # s after xmrig vanished with no stop note before the watchdog calls it a crash
+CRASH_MAX = 3              # watchdog restarts per hour, then it gives up (and says so)
+AGENT_LABEL = "com.minerv3.open-at-login"
+_HHMM = r"(?:[01][0-9]|2[0-3]):[0-5][0-9]"
+HOURS_RE = re.compile(rf"^{_HHMM}-{_HHMM}(?:,{_HHMM}-{_HHMM})*$")
 MAX_AGE = 60.0             # s: an older (or that far in the future) command is refused
 WINDOW_PICKUP = 20.0       # s for an open window to take a command before the helper gives up on it
 WINDOW_DONE = 60.0         # s for the window to finish it (start ≤ 12 s, stop ≤ 15 s)
@@ -70,6 +82,7 @@ def set_root(root: str) -> None:
 
 set_root(fleet.ROOT)
 KEY = os.environ.get("MINER_CONTROL_KEY") or os.path.expanduser("~/Library/Application Support/XMR Miner/control.key")
+LAUNCH_AGENTS = os.environ.get("MINER_LAUNCH_AGENTS") or os.path.expanduser("~/Library/LaunchAgents")
 
 
 # ---------------------------------------------------------------------- small things
@@ -283,9 +296,11 @@ def verify(data: bytes, sig: str) -> bool:
             pass
 
 
-def make_cmd(cmd: str, to: str, frm: str) -> str:
-    return json.dumps({"v": 1, "cmd": cmd, "to": to, "from": frm, "ts": round(time.time(), 3),
-                       "nonce": secrets.token_hex(12)}, separators=(",", ":"), sort_keys=True)
+def make_cmd(cmd: str, to: str, frm: str, arg: str = "") -> str:
+    m = {"v": 1, "cmd": cmd, "to": to, "from": frm, "ts": round(time.time(), 3), "nonce": secrets.token_hex(12)}
+    if arg:
+        m["arg"] = arg
+    return json.dumps(m, separators=(",", ":"), sort_keys=True)
 
 
 def check_cmd(msg: dict, me: str, seen: dict, now: float) -> str:
@@ -304,7 +319,235 @@ def check_cmd(msg: dict, me: str, seen: dict, now: float) -> str:
         return "bad nonce"
     if nonce in seen:
         return "already done (a repeat)"
+    if msg.get("cmd") == "hours" and not hours_ok(str(msg.get("arg") or "")):
+        return f"not valid hours: {msg.get('arg')!r} (22:00-08:30, always, off)"
     return ""
+
+
+# ---------------------------------------------------------------------- mining hours
+def hours_ok(v: str) -> bool:
+    """HOURS in machine.local: off | always | HH:MM-HH:MM[,HH:MM-HH:MM…], no range that starts where it ends."""
+    if v in ("off", "always"):
+        return True
+    if not HOURS_RE.match(v or ""):
+        return False
+    return all(a != b for a, b in (r.split("-") for r in v.split(",")))
+
+
+def parse_hours(v: str) -> Optional[list]:
+    """[(start minute, end minute), …] (end < start crosses midnight); always = [(0, 1440)]; off → None."""
+    if not v or v == "off" or not hours_ok(v):
+        return None
+    if v == "always":
+        return [(0, 1440)]
+    out = []
+    for r in v.split(","):
+        a, b = r.split("-")
+        out.append((int(a[:2]) * 60 + int(a[3:]), int(b[:2]) * 60 + int(b[3:])))
+    return out
+
+
+def _in_range(m: int, a: int, b: int) -> bool:
+    return a <= m < b if a < b else (m >= a or m < b)
+
+
+def _minute(ts: float) -> int:
+    lt = time.localtime(ts)
+    return lt.tm_hour * 60 + lt.tm_min
+
+
+def _at(ts: float, minute: int, day: int = 0) -> float:
+    """Local time `minute` (0-1439) on the day of ts, plus `day` days."""
+    lt = time.localtime(ts)
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + day, minute // 60, minute % 60, 0, 0, 0, -1))
+
+
+def in_hours(ranges: Optional[list], ts: float) -> bool:
+    return bool(ranges) and any(_in_range(_minute(ts), a, b) for a, b in ranges)
+
+
+def window_start(ranges: list, ts: float) -> float:
+    """When the hours that contain ts began (0 for always: a manual stop holds until you press s)."""
+    if ranges == [(0, 1440)]:
+        return 0.0
+    m = _minute(ts)
+    starts = [_at(ts, a) if (a <= m) else _at(ts, a, -1) for a, b in ranges if _in_range(m, a, b)]
+    return max(starts) if starts else ts
+
+
+def next_start(ranges: list, ts: float) -> Optional[float]:
+    """The next moment the hours begin, after ts (None for always)."""
+    if ranges == [(0, 1440)]:
+        return None
+    c = [_at(ts, a, d) for a, b in ranges for d in (0, 1, 2)]
+    c = [t for t in c if t > ts and not in_hours(ranges, t - 60)]  # a start, not a minute inside hours
+    return min(c) if c else None
+
+
+def current_end(ranges: list, ts: float) -> Optional[float]:
+    """When the hours that contain ts end (None for always)."""
+    if ranges == [(0, 1440)]:
+        return None
+    c = [_at(ts, b, d) for a, b in ranges for d in (0, 1, 2)]
+    c = [t for t in c if t > ts and not in_hours(ranges, t)]
+    return min(c) if c else None
+
+
+def hm(ts: Optional[float], now: Optional[float] = None) -> str:
+    if not ts:
+        return "—"
+    now = now or time.time()
+    return time.strftime("%H:%M" if ts - now < 86400 - 60 else "%a %H:%M", time.localtime(ts))
+
+
+def held(own: list, ranges: list, now: float) -> bool:
+    """A stop you made (t, Terminal, the main Mac) inside the current hours holds until their next start.
+    Only a stop made after the hours were set: new hours apply at once."""
+    last = next((e for e in reversed(own) if e["k"] in ("start", "stop")), None)
+    set_at = next((e["ts"] for e in reversed(own) if e["k"] == "hours"), 0.0)
+    return (bool(last) and last["k"] == "stop" and last.get("why") in MANUAL
+            and last["ts"] >= max(window_start(ranges, now), set_at))
+
+
+def machine_hours() -> str:
+    """HOURS from this Mac's machine.local (invalid → off), read the way bin/machine.sh reads it."""
+    try:
+        with open(os.path.join(ROOT, "machine.local"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return "off"
+    v = "off"
+    for ln in lines:
+        ln = "".join(ln.split("#", 1)[0].split())
+        if ln.startswith("HOURS="):
+            v = ln[6:] if hours_ok(ln[6:]) else v
+    return v
+
+
+def schedule_label(hours: str, own: list, running: bool, now: Optional[float] = None) -> str:
+    """What the hours do next, in words, for the fleet card: 'mining until 08:30', 'starts 22:00' …"""
+    now = now or time.time()
+    ranges = parse_hours(hours)
+    if ranges is None:
+        return ""
+    if ranges == [(0, 1440)]:
+        if held(own, ranges, now):
+            return "always · held by you until s"
+        return "always" if running else "always · starting…"
+    if in_hours(ranges, now):
+        if held(own, ranges, now):
+            return f"held by you · resumes {hm(next_start(ranges, now), now)}"
+        return f"mining until {hm(current_end(ranges, now), now)}" if running else "starting…"
+    return f"starts {hm(next_start(ranges, now), now)}" + (" · mining now (you started it)" if running else "")
+
+
+def agent_path() -> str:
+    return os.path.join(LAUNCH_AGENTS, AGENT_LABEL + ".plist")
+
+
+def login_item_on() -> bool:
+    return os.path.isfile(agent_path())
+
+
+def sync_login_item(hours: str) -> str:
+    """A Mac with hours opens XMR Miner at login (a LaunchAgent that runs /usr/bin/open on the app,
+    so the miner still starts from Terminal, which macOS lets read this folder); without hours, not."""
+    import plistlib
+    want = hours not in ("", "off")
+    app = os.path.join(ROOT, "XMR Miner.app")
+    path = agent_path()
+    if want:
+        if not os.path.isdir(app):
+            return "no XMR Miner.app here (run ./install.sh): cannot open at login"
+        d = {"Label": AGENT_LABEL, "ProgramArguments": ["/usr/bin/open", app], "RunAtLoad": True}
+        try:
+            with open(path, "rb") as f:
+                if plistlib.load(f) == d:
+                    return "opens at login"
+        except Exception:
+            pass
+        os.makedirs(LAUNCH_AGENTS, exist_ok=True)
+        with open(path, "wb") as f:
+            plistlib.dump(d, f)
+        note("login", why="on")
+        return "opens at login (added)"
+    if os.path.exists(path):
+        os.remove(path)
+        note("login", why="off")
+        return "no longer opens at login"
+    return ""
+
+
+def bench_running() -> bool:
+    """/bench (its own xmrig processes) or an update (minerctl holds logs/update.lock): hands off."""
+    if os.path.isdir(os.path.join(LOGS, "update.lock")):
+        return True
+    try:
+        return subprocess.run(["pgrep", "-f", "xmr_bench_sweep"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=2).returncode == 0
+    except Exception:
+        return False
+
+
+def own_tail() -> list:
+    return read_jsonl(EVENTS, 200_000)
+
+
+class Scheduler:
+    """The keeper's two jobs, checked every SCHED_EVERY seconds. `act(cmd, why)` starts or stops xmrig.
+    - hours: start when they begin (or when the keeper comes up inside them, e.g. after a reboot) unless
+      a stop you made holds them; stop once when they end (a start you make outside hours is left alone);
+    - watchdog: xmrig this keeper saw running is gone with no stop note → start it again, CRASH_MAX an hour."""
+
+    def __init__(self, act: Callable[[str, str], dict], is_running: Callable[[], bool] = xmrig_running,
+                 hours: Callable[[], str] = machine_hours, events: Callable[[], list] = own_tail,
+                 bench: Callable[[], bool] = bench_running) -> None:
+        self.act, self.is_running, self.hours, self.events, self.bench = act, is_running, hours, events, bench
+        self.prev_in: Optional[bool] = None
+        self.last_try = 0.0
+        self.seen_run: Optional[float] = None  # last time this keeper saw xmrig running
+        self.crashes: list[float] = []
+        self.gave_up = False
+
+    def tick(self, now: Optional[float] = None) -> Optional[str]:
+        now = now or time.time()
+        running = self.is_running()
+        own = self.events()
+        done: Optional[str] = None
+        if self.bench():
+            # /bench runs its own processes named xmrig: not the miner, and their end is not a crash
+            self.seen_run, self.prev_in = None, None
+            return None
+        if running:
+            self.seen_run, self.gave_up = now, False
+        elif self.seen_run is not None:
+            if any(e["k"] == "stop" and e["ts"] >= self.seen_run - 10 for e in own):
+                self.seen_run = None  # a stop anyone asked for: not a crash
+            elif now - self.seen_run > CRASH_GRACE and not self.bench():
+                self.seen_run = None
+                self.crashes = [t for t in self.crashes if now - t < 3600]
+                if len(self.crashes) < CRASH_MAX:
+                    self.crashes.append(now)
+                    self.last_try = now
+                    self.act("start", "watchdog")
+                    done = "start:watchdog"
+                elif not self.gave_up:
+                    self.gave_up = True
+                    note("watchdog", why=f"gave up after {CRASH_MAX} restarts in an hour")
+                    done = "gave-up"
+        ranges = parse_hours(self.hours())
+        now_in = in_hours(ranges, now)
+        if ranges is not None and done is None and not self.bench():
+            if self.prev_in is True and not now_in and running:
+                self.act("stop", "schedule")
+                done = "stop:schedule"
+            elif (now_in and not running and self.seen_run is None and now - self.last_try > 90
+                  and not held(own, ranges, now)):
+                self.last_try = now
+                self.act("start", "schedule")
+                done = "start:schedule"
+        self.prev_in = now_in if ranges is not None else None
+        return done
 
 
 # ---------------------------------------------------------------------- events
@@ -469,6 +712,20 @@ def local_events(worker: Optional[str] = None, now: Optional[float] = None) -> l
     return [dict(e) for e in out]
 
 
+def hours_changed() -> str:
+    """minerctl, after HOURS changed in machine.local: note it (once per change), open at login or not,
+    and make sure the keeper runs to follow them. One line for the person who changed them."""
+    hours = machine_hours()
+    last = next((e for e in reversed(own_tail()) if e["k"] == "hours"), None)
+    if (last or {}).get("why", "off") != hours:
+        note("hours", why=hours, by=os.environ.get("MINER_BY", ""))
+    login = sync_login_item(hours)
+    ensure()
+    if hours == "off":
+        return "Hours: off · mines only when you press s" + (f" · {login}" if login else "")
+    return f"Hours: {hours} · {schedule_label(hours, own_tail(), xmrig_running()) or '—'} · {login}"
+
+
 def note(kind: str, why: str = "", by: str = "", api: Optional[dict] = None) -> dict:
     """minerctl, at every start and stop: logs/events.jsonl gets when, why and who asked."""
     e: dict = {"ts": round(time.time(), 3), "k": kind, "worker": fleet.local_worker()}
@@ -487,7 +744,7 @@ def note(kind: str, why: str = "", by: str = "", api: Optional[dict] = None) -> 
 
 
 MARKS = {"start": "▶", "stop": "■", "exit": "■", "error": "⚠", "reject": "✗", "backup": "⇄", "pool": "⇄",
-         "pause": "‖", "resume": "▶", "denied": "!"}
+         "pause": "‖", "resume": "▶", "denied": "!", "hours": "◷", "login": "◷", "watchdog": "!"}
 
 
 def describe(e: dict, now: Optional[float] = None) -> tuple[str, str, str]:
@@ -496,12 +753,14 @@ def describe(e: dict, now: Optional[float] = None) -> tuple[str, str, str]:
     approx = "≈ " if e.get("approx") else ""
     if k == "start":
         title = {"remote": f"Started from {by or 'the main Mac'}", "restart": "Restarted" + (f" from {by}" if by else ""),
-                 "settings": "Restarted with new settings", "update": "Started after an update"}.get(why, "Started")
-        return "good", title, ""
+                 "settings": "Restarted with new settings", "update": "Started after an update",
+                 "schedule": "Started by the hours", "watchdog": "Restarted by the watchdog"}.get(why, "Started")
+        return ("warn" if why == "watchdog" else "good"), title, ("xmrig had ended with no stop recorded" if why == "watchdog" else "")
     if k == "stop":
         if why in ("restart", "settings"):
             return "hide", "Stopped for a restart", ""
-        title = {"remote": f"Stopped from {by or 'the main Mac'}", "update": "Stopped for an update"}.get(why, "Stopped")
+        title = {"remote": f"Stopped from {by or 'the main Mac'}", "update": "Stopped for an update",
+                 "schedule": "Stopped by the hours"}.get(why, "Stopped")
         det = ""
         if e.get("up"):
             det = f"after {fmt_up(e['up'])} · {int(e.get('acc') or 0):,} ✓ · {int(e.get('rej') or 0)} ✗"
@@ -540,6 +799,14 @@ def describe(e: dict, now: Optional[float] = None) -> tuple[str, str, str]:
         return "good", "Mining again", ""
     if k == "denied":
         return "bad", "Refused a command", why
+    if k == "hours":
+        v = why or "off"
+        title = "Hours off" if v == "off" else f"Hours set: {v.replace(',', ', ')}"
+        return "info", title + (f" from {by}" if by else ""), ""
+    if k == "login":
+        return "info", ("Opens XMR Miner at login" if why == "on" else "No longer opens XMR Miner at login"), ""
+    if k == "watchdog":
+        return "bad", "Watchdog gave up", f"{why}; press s to mine again"
     return "info", str(k), ""
 
 
@@ -559,7 +826,7 @@ def take_requests(max_age: float = MAX_AGE) -> list[dict]:
         except OSError:
             continue  # the helper gave up on it, or another window took it
         req = read_json(work)
-        if not req or req.get("cmd") not in CMDS or time.time() - float(req.get("ts") or 0) > max_age:
+        if not req or req.get("cmd") not in RUN_CMDS or time.time() - float(req.get("ts") or 0) > max_age:
             finish_request(nonce, {"ok": False, "error": "expired before the window saw it"})
             continue
         req["nonce"] = nonce
@@ -580,7 +847,7 @@ def to_window(msg: dict, pickup: float = WINDOW_PICKUP, done: float = WINDOW_DON
     nonce = msg["nonce"]
     req = os.path.join(INBOX, nonce + ".json")
     fin = os.path.join(INBOX, nonce + ".done")
-    write_json(req, {"cmd": msg["cmd"], "from": msg.get("from") or "", "ts": time.time()})
+    write_json(req, {"cmd": msg["cmd"], "from": msg.get("from") or "", "why": msg.get("why") or "", "ts": time.time()})
     t0 = time.time()
     while True:
         if os.path.exists(fin):
@@ -616,6 +883,7 @@ class Helper:
                  is_window: Callable[[], bool] = ui_open, is_running: Callable[[], bool] = xmrig_running) -> None:
         self.port = PORT if port is None else port
         self.bind = bind
+        self.sched = Scheduler(self.act, is_running)
         self.me = fleet.local_worker()
         self.token = fleet.read_token()
         self.is_window = is_window
@@ -629,8 +897,24 @@ class Helper:
 
     def hello(self) -> dict:
         win, run = self.is_window(), self.is_running()
-        return {"v": 1, "worker": self.me, "window": win, "xmrig": run, "version": self.version,
-                "can": list(CMDS) if win else (["stop"] if run else []), "key": fingerprint(pub_line())}
+        hours = machine_hours()
+        can = (["start", "stop", "restart"] if win else (["stop"] if run else [])) + ["hours"]
+        return {"v": 1, "worker": self.me, "window": win, "xmrig": run, "version": self.version, "can": can,
+                "key": fingerprint(pub_line()), "hours": hours, "sched": schedule_label(hours, own_tail(), run),
+                "login": login_item_on()}
+
+    def act(self, cmd: str, why: str) -> dict:
+        """The keeper's own start / stop (hours, watchdog): through the window when one is open."""
+        with self.lock:
+            if self.is_window():
+                res = to_window({"cmd": cmd, "from": "", "why": why, "nonce": secrets.token_hex(12)}, self.pickup)
+                return res if res is not None else {"ok": False, "error": "the window is busy; trying again soon"}
+            try:
+                p = subprocess.run([CTL, cmd], env=dict(os.environ, MINER_WHY=why, MINER_BY=""),
+                                   capture_output=True, text=True, timeout=60)
+                return {"ok": p.returncode == 0, "lines": (p.stdout + p.stderr).splitlines()[-4:]}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
 
     def deny(self, why: str) -> None:
         if time.time() - self.denied_at > 60:  # a burst of junk is one line, not a flood
@@ -671,6 +955,8 @@ class Helper:
 
     def execute(self, msg: dict) -> dict:
         cmd, frm = msg["cmd"], msg.get("from") or ""
+        if cmd == "hours":
+            return self.set_hours(str(msg.get("arg") or ""), frm)
         if self.is_window():
             res = to_window(msg, self.pickup)
             if res is not None:
@@ -681,6 +967,20 @@ class Helper:
         elif cmd != "stop":
             return {"ok": False, "error": f"XMR Miner is not open on {short(self.me)}: open it there to {cmd} mining"}
         return self.direct_stop(frm)
+
+    def set_hours(self, v: str, frm: str) -> dict:
+        """The main Mac sets this Mac's mining hours: machine.local via minerctl, as `config set` would."""
+        args = ["config", "unset", "HOURS"] if v == "off" else ["config", "set", f"HOURS={v}"]
+        try:
+            p = subprocess.run([CTL, *args], env=dict(os.environ, MINER_WHY="remote", MINER_BY=frm),
+                               capture_output=True, text=True, timeout=30)
+            lines = [ln.rstrip() for ln in (p.stdout + p.stderr).splitlines() if ln.strip()]
+            ok = p.returncode == 0
+        except Exception as e:
+            lines, ok = [f"config failed: {e}"], False
+        hours = machine_hours()
+        return {"ok": ok and hours == v, "lines": lines[-3:], "hours": hours,
+                "sched": schedule_label(hours, own_tail(), self.is_running()), "login": login_item_on()}
 
     def direct_stop(self, frm: str) -> dict:
         """The window is closed (or busy): stop xmrig the way t does, without the window."""
@@ -775,15 +1075,17 @@ def helper_pid() -> Optional[int]:
     return None
 
 
+def lan_ok() -> bool:
+    """Commands from the main Mac: a follower with the fleet on the LAN (token, control.pub, LAN=on)."""
+    return (not is_main() and bool(fleet.read_token()) and bool(pub_line())
+            and fleet.job_arg("--http-host") in ("", "0.0.0.0"))
+
+
 def serve() -> int:
-    """The helper's life: listen while the window is open or xmrig runs; restart on a new release."""
-    if is_main():
-        print("This is the main Mac: it sends commands, so it runs no helper.")
-        return 0
-    if not fleet.read_token() or not pub_line():
-        print("No fleet.token or control.pub here: nothing to listen for.")
-        return 1
-    h = Helper()
+    """The keeper's life: listen while the window is open, xmrig runs, or this Mac has hours; follow the
+    hours and watch for crashes every SCHED_EVERY s; restart itself on a new release. The main Mac and a
+    Mac with LAN=off listen on 127.0.0.1 only (no commands from anywhere else)."""
+    h = Helper(bind="0.0.0.0" if lan_ok() else "127.0.0.1")
     try:
         httpd = h.server()
     except OSError as e:
@@ -792,15 +1094,28 @@ def serve() -> int:
     write_json(PIDFILE, {"pid": os.getpid(), "port": h.port, "version": h.version, "started": time.time()})
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     threading.Thread(target=httpd.serve_forever, name="control", daemon=True).start()
-    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} helper {h.version} on :{h.port} for {h.me}", flush=True)
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} keeper {h.version} on {h.bind}:{h.port} for {h.me}", flush=True)
+    try:
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} hours {machine_hours()} · {sync_login_item(machine_hours()) or 'no login item'}", flush=True)
+    except OSError as e:
+        print(f"login item: {e}", flush=True)
     restart = False
     idle = 0
+    last_tick = 0.0
     try:
         while True:
             time.sleep(2)
-            idle = 0 if (ui_open() or xmrig_running()) else idle + 1
+            if time.time() - last_tick >= SCHED_EVERY:
+                last_tick = time.time()
+                try:
+                    done = h.sched.tick()
+                    if done:
+                        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {done}", flush=True)
+                except Exception as e:
+                    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} schedule check failed: {e}", flush=True)
+            idle = 0 if (ui_open() or xmrig_running() or machine_hours() != "off") else idle + 1
             if idle >= 2:
-                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} no window and no miner: exiting", flush=True)
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} no window, no miner, no hours: exiting", flush=True)
                 break
             if code_version() != h.version:
                 print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} new release: restarting", flush=True)
@@ -820,15 +1135,7 @@ def serve() -> int:
 
 
 def ensure() -> str:
-    """Start the helper here unless it runs, this is the main Mac, or the fleet is off (LAN=off)."""
-    if is_main():
-        return "main Mac: no helper"
-    if not fleet.read_token():
-        return "no fleet.token"
-    if not pub_line():
-        return "no control.pub"
-    if fleet.job_arg("--http-host") not in ("", "0.0.0.0"):
-        return "LAN=off: this Mac stays private"
+    """Start the keeper here unless it runs (every Mac: the main one keeps its hours and watchdog too)."""
     if helper_pid():
         return "running"
     os.makedirs(LOGS, exist_ok=True)
@@ -867,11 +1174,11 @@ def ensure() -> str:
 
 # ---------------------------------------------------------------------- the main Mac's side
 def send(host: str, to: str, cmd: str, token: Optional[str] = None, frm: Optional[str] = None,
-         port: Optional[int] = None, timeout: float = 75.0) -> dict:
+         port: Optional[int] = None, timeout: float = 75.0, arg: str = "") -> dict:
     """One signed command to one Mac's helper. Always returns {ok, …, error?}."""
     token = fleet.read_token() if token is None else token
     try:
-        msg = make_cmd(cmd, to, frm or fleet.local_worker())
+        msg = make_cmd(cmd, to, frm or fleet.local_worker(), arg)
         body = json.dumps({"msg": msg, "sig": sign(msg.encode())}).encode()
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -919,8 +1226,8 @@ def match_targets(arg: str, workers: list[str], me: str) -> tuple[list[str], str
 
 
 RUNNING = ("mining", "starting", "paused", "pool")
-DOING = {"start": "Starting", "stop": "Stopping", "restart": "Restarting"}
-DONE = {"start": "Started", "stop": "Stopped", "restart": "Restarted"}
+DOING = {"start": "Starting", "stop": "Stopping", "restart": "Restarting", "hours": "Setting hours for"}
+DONE = {"start": "Started", "stop": "Stopped", "restart": "Restarted", "hours": "Set hours for"}
 
 
 def plan(cmd: str, workers: list[str], rows: list[dict], main: bool, have_key: bool) -> tuple[list[dict], list[tuple]]:
@@ -936,7 +1243,9 @@ def plan(cmd: str, workers: list[str], rows: list[dict], main: bool, have_key: b
             continue
         st = r.get("state")
         running = st in RUNNING
-        if cmd == "start" and running:
+        if cmd == "hours":
+            pass  # hours apply whether the Mac mines or not
+        elif cmd == "start" and running:
             skip.append((w, "already mining"))
             continue
         if cmd in ("stop", "restart") and not running:
@@ -959,7 +1268,8 @@ def plan(cmd: str, workers: list[str], rows: list[dict], main: bool, have_key: b
             skip.append((w, "it has another control key: release from here, then reopen XMR Miner there"))
             continue
         if cmd not in (ctl.get("can") or []):
-            skip.append((w, f"XMR Miner is not open there: open it to {cmd} mining"))
+            skip.append((w, "it needs the new release: reopen XMR Miner there once" if cmd == "hours"
+                         else f"XMR Miner is not open there: open it to {cmd} mining"))
             continue
         go.append(r)
     return go, skip
@@ -992,10 +1302,10 @@ def ctl_label(r: dict, main: bool) -> str:
     if not main:
         return "XMR Miner open there" if ctl.get("window") else "helper running there"
     if "start" in can:
-        return "XMR Miner open there · s start · t stop · r restart"
+        return "XMR Miner open there"
     if "stop" in can:
-        return "window closed there · t stops it · start needs the window"
-    return "helper answers · open XMR Miner there to start it"
+        return "window closed there · t stops it, s needs the window"
+    return "open XMR Miner there to start it"
 
 
 # ---------------------------------------------------------------------- every Mac's events (main Mac)
@@ -1155,10 +1465,12 @@ def print_events(evs: list[dict], color: bool) -> None:
 
 
 def cli_send(args: list[str]) -> int:
-    if len(args) < 2 or args[0] not in CMDS:
-        print("Usage: ./bin/minerctl.sh remote start|stop|restart <mac | all>   (m2, i7, all …)")
+    if len(args) < 2 or args[0] not in CMDS or (args[0] == "hours" and (len(args) < 3 or not hours_ok(args[2]))):
+        print("Usage: ./bin/minerctl.sh remote start|stop|restart <mac | all>   (m2, i7, all …)\n"
+              "       ./bin/minerctl.sh remote hours <mac | all> 22:00-08:30 | always | off")
         return 1
     cmd, target = args[0], args[1]
+    arg = args[2] if cmd == "hours" else ""
     f = fleet.Fleet()
     f.refresh()
     rows = f.rows()
@@ -1174,13 +1486,16 @@ def cli_send(args: list[str]) -> int:
     for r in go:
         w = r["worker"]
         if r.get("here"):
-            p = subprocess.run([CTL, cmd], env=dict(os.environ, MINER_WHY="cli"), capture_output=True, text=True, timeout=60)
+            what = ([CTL, "config", "unset", "HOURS"] if arg == "off" else [CTL, "config", "set", f"HOURS={arg}"]) if cmd == "hours" else [CTL, cmd]
+            p = subprocess.run(what, env=dict(os.environ, MINER_WHY="cli"), capture_output=True, text=True, timeout=60)
             out = [ln for ln in (p.stdout + p.stderr).splitlines() if ln.strip()]
             print(f"  {short(w)} (this Mac): " + (" · ".join(out[:2]) or "done"))
             continue
         print(f"  {short(w)}: {DOING[cmd].lower()}…", flush=True)
-        res = send(r["host"], w, cmd, f.token)
-        if res.get("ok"):
+        res = send(r["host"], w, cmd, f.token, arg=arg)
+        if res.get("ok") and cmd == "hours":
+            print(f"  {short(w)}: hours {res.get('hours')} · {res.get('sched') or '—'}" + (" · opens at login" if res.get("login") else ""))
+        elif res.get("ok"):
             print(f"  {short(w)}: {DONE[cmd].lower()} at {when(time.time())}" + (f" · via the {res.get('via')}" if res.get("via") else ""))
         else:
             rc = 1
@@ -1216,6 +1531,8 @@ def main(argv: Optional[list] = None) -> int:
         print("control.py serve                      the helper (started by XMR Miner and minerctl start)\n"
               "control.py ensure                     start the helper here if it should run\n"
               "control.py send start|stop|restart <mac|all>   main Mac: signed command\n"
+              "control.py send hours <mac|all> 22:00-08:30|always|off\n"
+              "control.py hours-changed              minerctl after HOURS changed: note, login item, keeper\n"
               "control.py events [-n N] [--here] [--all]      timed event log\n"
               "control.py keygen                     main Mac: make the signing key + control.pub\n"
               "control.py note start|stop [--why W] [--by NAME] [--api-stdin]\n"
@@ -1227,6 +1544,9 @@ def main(argv: Optional[list] = None) -> int:
         return serve()
     if a[0] == "ensure":
         print(ensure())
+        return 0
+    if a[0] == "hours-changed":
+        print(hours_changed())
         return 0
     if a[0] == "send":
         return cli_send(a[1:])
@@ -1343,6 +1663,103 @@ def self_test() -> int:
         os.makedirs(os.path.join(td, "logs"))
         set_root(td)
         KEY = os.path.join(td, "keys", "control.key")
+        # mining hours
+        check("hours_ok", all(hours_ok(v) for v in ("off", "always", "22:00-08:30", "22:00-08:30,12:00-13:00"))
+              and not any(hours_ok(v) for v in ("", "24:00-01:00", "22:00-22:00", "7:00-08:00", "22:00-08:30,", "on")))
+        night = parse_hours("22:00-08:30")
+        d0 = time.mktime((2026, 9, 23, 0, 0, 0, 0, 0, -1))  # a Wednesday, local midnight
+        at = lambda h, m=0, day=0: d0 + day * 86400 + h * 3600 + m * 60  # noqa: E731
+        check("in_hours across midnight", in_hours(night, at(23)) and in_hours(night, at(3)) and not in_hours(night, at(8, 30))
+              and not in_hours(night, at(12)) and in_hours(night, at(22)))
+        check("window start: 03:00 → yesterday 22:00; 23:00 → today 22:00", window_start(night, at(3)) == at(22, 0, -1)
+              and window_start(night, at(23)) == at(22))
+        check("next start / current end", next_start(night, at(12)) == at(22) and next_start(night, at(3)) == at(22)
+              and current_end(night, at(23)) == at(8, 30, 1) and current_end(night, at(3)) == at(8, 30))
+        two = parse_hours("22:00-08:30,12:00-13:00")
+        check("two ranges", in_hours(two, at(12, 30)) and next_start(two, at(9)) == at(12) and current_end(two, at(12, 10)) == at(13))
+        check("always", in_hours(parse_hours("always"), at(15)) and window_start(parse_hours("always"), at(15)) == 0.0
+              and next_start(parse_hours("always"), at(15)) is None and parse_hours("off") is None)
+        own_h = [{"k": "start", "ts": at(22, 0, -1), "why": "schedule"}, {"k": "stop", "ts": at(2), "why": "window"}]
+        check("a stop you made inside the hours holds them", held(own_h, night, at(3)))
+        check("…until their next start", not held(own_h, night, at(22, 5)))
+        check("a stop for an update does not hold", not held([dict(own_h[1], why="update")], night, at(3)))
+        check("a stop before the hours began does not hold", not held([{"k": "stop", "ts": at(21), "why": "window"}], night, at(23)))
+        check("a stop made before the hours were set does not hold (new hours apply at once)",
+              not held([{"k": "stop", "ts": at(22, 30), "why": "remote"}, {"k": "hours", "ts": at(22, 31), "why": "22:00-08:30"}], night, at(23)))
+        check("schedule labels", schedule_label("22:00-08:30", [], True, at(23)) == "mining until 08:30"
+              and schedule_label("22:00-08:30", [], False, at(12)) == "starts 22:00"
+              and schedule_label("22:00-08:30", own_h, False, at(3)) == "held by you · resumes 22:00"
+              and schedule_label("off", [], False, at(3)) == "")
+
+        # the scheduler, on a fake clock: hours, holds, the watchdog
+        st_ = {"run": False, "hours": "22:00-08:30", "ev": [], "bench": False}
+        acts: list = []
+
+        def fake_act(cmd: str, why: str) -> dict:
+            acts.append((cmd, why))
+            st_["run"] = cmd != "stop"
+            st_["ev"].append({"k": cmd if cmd != "restart" else "start", "ts": clock[0], "why": why})
+            return {"ok": True}
+
+        clock = [at(21, 59)]
+        sc = Scheduler(fake_act, is_running=lambda: st_["run"], hours=lambda: st_["hours"], events=lambda: st_["ev"],
+                       bench=lambda: st_["bench"])
+        check("sched: before the hours, nothing", sc.tick(clock[0]) is None)
+        clock[0] = at(22, 0, 0) + 5
+        check("sched: hours begin → start", sc.tick(clock[0]) == "start:schedule" and acts[-1] == ("start", "schedule"))
+        clock[0] += 600
+        check("sched: mining inside the hours → nothing", sc.tick(clock[0]) is None)
+        clock[0] = at(2, 0, 1)
+        st_["run"] = False
+        st_["ev"].append({"k": "stop", "ts": clock[0] - 1, "why": "window"})
+        check("sched: you pressed t at 02:00 → held, no restart", sc.tick(clock[0]) is None and sc.tick(clock[0] + 200) is None)
+        clock[0] = at(8, 30, 1) + 5
+        check("sched: hours end while stopped → nothing", sc.tick(clock[0]) is None)
+        clock[0] = at(22, 0, 1) + 5
+        check("sched: next evening → start again", sc.tick(clock[0]) == "start:schedule")
+        clock[0] = at(8, 30, 2) + 5
+        check("sched: hours end while mining → stop once", sc.tick(clock[0]) == "stop:schedule" and sc.tick(clock[0] + 20) is None)
+        clock[0] = at(12, 0, 2)
+        st_["run"] = True
+        st_["ev"].append({"k": "start", "ts": clock[0], "why": "window"})
+        sc.tick(clock[0])
+        check("sched: you start it outside the hours → left alone", sc.tick(clock[0] + 3000) is None and st_["run"])
+        # watchdog: xmrig vanishes with no stop note
+        st_["run"] = False
+        clock[0] += 3010
+        check("watchdog: waits for a stop note first", sc.tick(clock[0]) is None)
+        clock[0] += 25
+        check("watchdog: no note → restart", sc.tick(clock[0]) == "start:watchdog" and acts[-1] == ("start", "watchdog"))
+        for i in range(2):
+            sc.tick(clock[0] + 1)
+            st_["run"] = False
+            clock[0] += 60
+            sc.tick(clock[0])
+            clock[0] += 25
+            sc.tick(clock[0])
+        st_["run"] = True
+        sc.tick(clock[0] + 1)
+        st_["run"] = False
+        clock[0] += 60
+        gave = sc.tick(clock[0])
+        wd = [a for a in acts if a == ("start", "watchdog")]
+        check("watchdog: 3 restarts an hour, then gives up (once, with a note)", len(wd) == 3 and gave == "gave-up"
+              and sc.tick(clock[0] + 30) is None and any(e["k"] == "watchdog" for e in read_jsonl(EVENTS)))
+        clock[0] += 30
+        st_["run"] = True
+        sc.tick(clock[0] + 40)
+        st_["run"] = False
+        st_["ev"].append({"k": "stop", "ts": clock[0] + 41, "why": "cli"})
+        check("watchdog: a stop with a note is not a crash", sc.tick(clock[0] + 100) is None and sc.tick(clock[0] + 130) is None)
+        st_["bench"] = True
+        sc2 = Scheduler(fake_act, is_running=lambda: False, hours=lambda: "always", events=lambda: [], bench=lambda: st_["bench"])
+        check("sched: never during /bench", sc2.tick(at(12)) is None)
+        bench_run = {"on": True, "run": True}
+        sc3 = Scheduler(fake_act, is_running=lambda: bench_run["run"], hours=lambda: "off", events=lambda: [], bench=lambda: bench_run["on"])
+        sc3.tick(at(12))
+        bench_run.update(on=False, run=False)
+        check("watchdog: the bench's own xmrig ending is not a crash", sc3.tick(at(12, 1)) is None and sc3.tick(at(12, 2)) is None)
+
         # keygen writes control.pub; a second key plays the stranger
         check("keygen", keygen().startswith("made") and pub_line().startswith("ssh-ed25519 ") and os.path.isfile(KEY))
         check("keygen again keeps the key", keygen() == "exists")
@@ -1384,7 +1801,8 @@ def self_test() -> int:
         d, st = fleet.http_json(base + "/v1/hello", "", 2)
         check("helper: no token → refused", st == "auth")
         d, st = fleet.http_json(base + "/v1/hello", "tok", 2)
-        check("helper: hello", st == "ok" and d["worker"] == "minerv3-m2-8gb" and d["can"] == ["stop"] and d["key"] == fingerprint(pub_line()))
+        check("helper: hello", st == "ok" and d["worker"] == "minerv3-m2-8gb" and d["can"] == ["stop", "hours"]
+              and d["key"] == fingerprint(pub_line()) and d["hours"] == "off")
         res = send("127.0.0.1", "minerv3-m2-8gb", "stop", "tok", "minerv3-m4-16gb", port=h.port)
         check("helper: stop with the window closed", res.get("ok") and res.get("via") == "helper"
               and open(calls).read().split("\n")[0] == "stop remote minerv3-m4-16gb")
@@ -1436,8 +1854,31 @@ def self_test() -> int:
         ks = [e["k"] for e in (d or {}).get("events", [])]
         check("helper: events", st == "ok" and "reject" in ks and "error" in ks and "denied" in ks
               and ("backup" in ks or not backup_pool()))
+        # hours from the main Mac: minerctl config set HOURS=… (stub), answered with the new schedule
+        with open(os.path.join(td, "machine.local"), "w") as f:
+            f.write("HOURS=22:00-08:30\n")
+        res = send("127.0.0.1", "minerv3-m2-8gb", "hours", "tok", "minerv3-m4-16gb", port=h.port, arg="22:00-08:30")
+        calls_now = open(calls).read()
+        check("helper: hours from the main Mac → minerctl config set HOURS=…", res.get("ok") and res.get("hours") == "22:00-08:30"
+              and "config remote minerv3-m4-16gb" in calls_now)
+        res = send("127.0.0.1", "minerv3-m2-8gb", "hours", "tok", "minerv3-m4-16gb", port=h.port, arg="25:00-01:00")
+        check("helper: bad hours refused before anything runs", not res.get("ok") and "not valid hours" in res.get("error", ""))
         httpd.shutdown()
         httpd.server_close()
+
+        # the login item follows the hours (LaunchAgents in the scratch folder)
+        global LAUNCH_AGENTS
+        la_old, LAUNCH_AGENTS = LAUNCH_AGENTS, os.path.join(td, "LaunchAgents")
+        os.makedirs(os.path.join(td, "XMR Miner.app"))
+        try:
+            import plistlib
+            check("login item: hours on → added", sync_login_item("22:00-08:30").endswith("(added)") and login_item_on()
+                  and plistlib.load(open(agent_path(), "rb"))["ProgramArguments"] == ["/usr/bin/open", os.path.join(td, "XMR Miner.app")])
+            check("login item: same hours → unchanged", sync_login_item("always") == "opens at login")
+            check("login item: hours off → removed", sync_login_item("off") == "no longer opens at login" and not login_item_on())
+            check("login item: noted both ways", [e.get("why") for e in read_jsonl(EVENTS) if e["k"] == "login"] == ["on", "off"])
+        finally:
+            LAUNCH_AGENTS = la_old
 
         # the main Mac's feed: helper events are exact; a Mac without one is counted from its xmrig
         feed = Feed(me="minerv3-m4-16gb", path=os.path.join(td, "logs", "fleet-events.jsonl"))

@@ -233,12 +233,46 @@ How it works:
   check the signature against `control.pub` from the repo and refuse a command that is over a minute old, one they
   have seen before, or one meant for another Mac. Refusals land in the event log. Reads (hello, events) want
   `fleet.token`, like xmrig's API; xmrig's own API stays read-only.
-- The fleet card says what the main Mac can do to each Mac: `XMR Miner open there · s start · t stop · r restart`,
-  `window closed there · t stops it`, or why not (`can't reach it`, `no helper there yet: reopen XMR Miner on it once`).
+- The fleet card says what the main Mac can do to each Mac: `XMR Miner open there`,
+  `window closed there · t stops it, s needs the window`, or why not (`can't reach it`, `no helper there yet: reopen XMR Miner on it once`).
   A Mac with XMR Miner open and its miner stopped shows as `stopped` instead of `offline`.
 - New key (lost or rotated): `./bin/minerctl.sh remote setup --force`, release, reopen XMR Miner on every Mac.
 - The helper needs the fleet on the LAN: `LAN=off` in `machine.local` keeps a Mac out of it (no helper there).
   With the macOS firewall on, allow incoming connections for python3 once when macOS asks.
+
+## Mining hours, the watchdog, and after a reboot
+
+Hours are **off by default**: a Mac mines only when you press `s` (or the main Mac starts it). Give a Mac hours and
+its keeper (the same helper, `bin/control.py`) follows them:
+
+```bash
+./bin/minerctl.sh config set HOURS=22:00-08:30          # this Mac: nights
+./bin/minerctl.sh config set HOURS=22:00-08:30,12:00-13:00
+./bin/minerctl.sh config set HOURS=always               # around the clock
+./bin/minerctl.sh config unset HOURS                    # off again
+./bin/minerctl.sh remote hours m2 22:00-08:30           # main Mac: another Mac's hours (or all)
+```
+
+In the UI: `/fleet`, pick a Mac, `h`, type the hours; `h` on `/config` for this Mac; or `/hours m2 22:00-08:30`.
+
+- **When the hours begin**, the keeper starts xmrig (through the window when it is open, so its ledger says
+  `Started xmrig · by the hours`); **when they end**, it stops it once. A start you make outside the hours is left alone.
+- **A stop you make inside the hours** (`t`, Terminal, or the main Mac) holds until their next start: the Fleet card
+  says `held by you · resumes 22:00`. With `always`, it holds until you press `s`.
+- **After a reboot** a Mac with hours opens XMR Miner at login (a LaunchAgent, `~/Library/LaunchAgents/
+  com.minerv3.open-at-login.plist`, that runs `open` on `XMR Miner.app`, so the miner still starts from Terminal),
+  and mines if it is inside its hours. A Mac without hours gets no login item. The Mac has to log in (automatic
+  login, or you logging in) for this to happen.
+- **The watchdog** (every Mac, hours or not): xmrig that the keeper saw running and that is gone with no stop
+  recorded (a crash, a kill) is started again after 20 s, at most 3 times an hour; then `Watchdog gave up` lands in
+  the event log and it waits for `s`. It never starts during `/bench`.
+- The keeper runs while XMR Miner is open, while xmrig runs, or while the Mac has hours, on every Mac (the main one
+  too, listening on 127.0.0.1 only). Every change of hours, login item, scheduled start / stop and watchdog restart
+  is in the event log.
+
+The side panel's fleet section shows each Mac's **uptime over the last 24 hours** (from the pool's hashrate history,
+refreshed every 5 minutes, points 6 to 18 minutes apart, so a stop of a minute or two does not show), its share
+count, and how long an offline Mac has been gone.
 
 ## Event log (times for everything)
 

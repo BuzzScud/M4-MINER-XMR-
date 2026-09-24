@@ -30,6 +30,10 @@
 #   PAUSE=120          pause while the keyboard or mouse is in use, mine again after N s idle
 #                      (10-3600, default 120; off mines while you work: --pause-on-active)
 #   LAN=off            keep this Mac's API on 127.0.0.1 (the fleet view cannot see it)
+#   HOURS=22:00-08:30  mining hours: the keeper (bin/control.py) starts xmrig when they begin, stops it
+#                      when they end, and XMR Miner opens at login. Several: 22:00-08:30,12:00-13:00;
+#                      always = around the clock; off (default) = mines only when you press s.
+#                      A stop you make inside the hours holds until the next start.
 #
 # Fleet: with fleet.token present the API listens on the LAN (0.0.0.0:18088),
 # needs that token, and reports the worker name instead of the host name.
@@ -40,7 +44,9 @@ POOL_DEFAULT="gulf.moneroocean.stream:20016"
 POOL="$POOL_DEFAULT"
 BACKUP_DEFAULT="de.moneroocean.stream:20016"
 LABEL="com.minerv3.xmrig"
-SETTING_KEYS=(THREADS MODE WORKER POOL BACKUP TLS YIELD PAUSE LAN)
+SETTING_KEYS=(THREADS MODE WORKER POOL BACKUP TLS YIELD PAUSE LAN HOURS)
+HHMM='([01][0-9]|2[0-3]):[0-5][0-9]'
+HOURS_RE="^${HHMM}-${HHMM}(,${HHMM}-${HHMM})*\$"
 
 # True when VALUE is a valid machine.local setting for KEY.
 setting_ok() {
@@ -53,8 +59,18 @@ setting_ok() {
     BACKUP)  [[ "$v" == off ]] || setting_ok POOL "$v" ;;
     TLS|YIELD|LAN) [[ "$v" == (on|off) ]] ;;
     PAUSE)   [[ "$v" == off || "$v" == <10-3600> ]] ;;
+    HOURS)   [[ "$v" == (off|always) || "$v" =~ $HOURS_RE ]] && ! hours_empty "$v" ;;
     *) return 1 ;;
   esac
+}
+
+# True when a range starts and ends at the same minute (22:00-22:00 would mean nothing or everything).
+hours_empty() {
+  local r
+  for r in ${(s:,:)1}; do
+    [[ "$r" == *-* && "${r%-*}" == "${r#*-}" ]] && return 0
+  done
+  return 1
 }
 
 # What each key takes, for error messages.
@@ -69,6 +85,7 @@ setting_help() {
     YIELD)   print -r -- "YIELD=on | off" ;;
     PAUSE)   print -r -- "PAUSE=<10-3600 seconds idle> | off" ;;
     LAN)     print -r -- "LAN=on | off" ;;
+    HOURS)   print -r -- "HOURS=22:00-08:30[,12:00-13:00] | always | off" ;;
     *)       print -r -- "keys: ${SETTING_KEYS[*]}" ;;
   esac
 }
@@ -158,7 +175,7 @@ chip_slug() {
 }
 
 # Sets: ARCH CHIP CORES PHYS PCORE ECORE RAMGB L3 CORES_LABEL THREADS AUTO_THREADS THREADS_SPEC
-#       MODE MODE_SPEC RXINIT WORKER POOL BACKUP TLS YIELD PAUSE LAN ROLE
+#       MODE MODE_SPEC RXINIT WORKER POOL BACKUP TLS YIELD PAUSE LAN HOURS ROLE
 machine_detect() {
   local root="$1"
   ARCH=$(uname -m)
@@ -203,6 +220,7 @@ machine_detect() {
   YIELD="off"
   PAUSE="120"
   LAN="on"
+  HOURS="off"
 
   # machine.local overrides (invalid lines are skipped; `minerctl config` lists them)
   local f="$root/machine.local" line k v backup_set=0
@@ -224,6 +242,7 @@ machine_detect() {
         YIELD)   YIELD=$v ;;
         PAUSE)   PAUSE=$v ;;
         LAN)     LAN=$v ;;
+        HOURS)   HOURS=$v ;;
       esac
     done < "$f"
   fi
@@ -398,6 +417,11 @@ machine_print() {
   else
     echo "  Pause:   ${PAUSE} s (pauses while the keyboard or mouse is in use; mines after ${PAUSE} s idle)"
   fi
+  case "$HOURS" in
+    off)    echo "  Hours:   off (mines only when you press s)" ;;
+    always) echo "  Hours:   always (the keeper keeps it mining; a stop you make holds until you press s)" ;;
+    *)      echo "  Hours:   $HOURS (the keeper starts and stops it; XMR Miner opens at login)" ;;
+  esac
   if [[ "$(api_host)" == 0.0.0.0 ]]; then
     echo "  API:     0.0.0.0:18088 (LAN, token from fleet.token)"
   elif [[ -n "${FLEET_TOKEN:-}" ]]; then
@@ -419,7 +443,7 @@ if [[ "${ZSH_EVAL_CONTEXT:-}" == "toplevel" ]]; then
   read_fleet_token "$_root"
   if [[ "${1:-}" == --env ]]; then
     # machine-readable, for bin/miner-ui.py
-    for _k in ARCH CORES PHYS L3 RAMGB AUTO_THREADS THREADS THREADS_SPEC MODE MODE_SPEC WORKER POOL BACKUP TLS YIELD PAUSE LAN; do
+    for _k in ARCH CORES PHYS L3 RAMGB AUTO_THREADS THREADS THREADS_SPEC MODE MODE_SPEC WORKER POOL BACKUP TLS YIELD PAUSE LAN HOURS; do
       print -r -- "$_k=${(P)_k}"
     done
     exit 0

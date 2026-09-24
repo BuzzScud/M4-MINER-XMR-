@@ -216,6 +216,7 @@ local_template() {
 # YIELD=off      on: other apps get the CPU first (lower H/s)
 # PAUSE=120      pause while the keyboard or mouse is in use, mine after N s idle (10-3600) | off
 # LAN=on         off: API on 127.0.0.1 only (the fleet view cannot see this Mac)
+# HOURS=off      mining hours, e.g. 22:00-08:30 or 22:00-08:30,12:00-13:00 | always | off (only when you press s)
 EOF
 }
 
@@ -620,6 +621,11 @@ print(f"Pool: {pool}")
           local_set "$ROOT" "${keys[$i]}" "${vals[$i]}"
           echo "Set ${keys[$i]}=${vals[$i]}"
         done
+        # HOURS is not an xmrig setting: the keeper follows it; nothing restarts for it alone
+        if (( ${keys[(Ie)HOURS]} )); then
+          python3 "$ROOT/bin/control.py" hours-changed
+          (( ${#keys} == 1 )) && exit 0
+        fi
         apply_settings
         ;;
       unset)
@@ -629,7 +635,12 @@ print(f"Pool: {pool}")
           if (( ! ${SETTING_KEYS[(Ie)$k]} )); then echo "Unknown key: $k  (keys: ${SETTING_KEYS[*]})"; exit 1; fi
           local_unset "$ROOT" "$k"
           echo "Unset $k (automatic again)"
+          [[ $k == HOURS ]] && hours_touched=1
         done
+        if (( ${hours_touched:-0} )); then
+          python3 "$ROOT/bin/control.py" hours-changed
+          (( $# == 1 )) && exit 0
+        fi
         apply_settings
         ;;
       edit)
@@ -637,6 +648,7 @@ print(f"Pool: {pool}")
         [[ -f "$ROOT/machine.local" ]] || local_template > "$ROOT/machine.local"
         editor=(${=${VISUAL:-${EDITOR:-nano}}})
         "${editor[@]}" "$ROOT/machine.local" || { echo "Editor exited with an error; nothing applied."; exit 1; }
+        python3 "$ROOT/bin/control.py" hours-changed >/dev/null 2>&1 || true
         [[ "${1:-}" == --no-apply ]] && exit 0  # the UI applies it itself, to follow a restart
         apply_settings
         ;;
@@ -651,6 +663,7 @@ print(f"Pool: {pool}")
         else
           echo "No machine.local; already automatic."
         fi
+        python3 "$ROOT/bin/control.py" hours-changed >/dev/null 2>&1 || true
         apply_settings
         ;;
       path)
@@ -698,6 +711,8 @@ Usage: ./bin/minerctl.sh <command>
   nice               try nice -10 on xmrig
   fleet [...]        every Mac on this wallet
   remote start|stop|restart <mac|all>   main Mac: start or stop another Mac (m2, i7, all …)
+  remote hours <mac|all> <hours>        main Mac: mining hours there: 22:00-08:30 | always | off
+  config set HOURS=22:00-08:30          this Mac's mining hours (off = only when you press s)
   remote setup       main Mac: make the signing key (then release, so the others get control.pub)
   events [-n N] [--here] [--all]        timed log: pool errors, rejected shares, starts, stops
   release ["msg"]    main Mac: commit everything here, push, release it to the others (--yes: no prompt)
@@ -891,7 +906,9 @@ except Exception:
     if ! is_up; then echo "Not running."; exit 0; fi
     reason="${1:-stop}"
     J=$(api_curl "$API" --max-time 2 || true)
-    if [[ -n $J ]]; then
+    if [[ "${MINER_WHY:-}" == schedule ]]; then
+      :  # the hours end every day: no Desktop file for that; the event log has it
+    elif [[ -n $J ]]; then
       print -r -- "$J" | python3 "$ROOT/bin/write-session-summary.py" --reason "$reason" --api-stdin || true
     else
       python3 "$ROOT/bin/write-session-summary.py" --reason "$reason" || true

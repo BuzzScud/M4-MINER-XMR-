@@ -110,6 +110,7 @@ COMMANDS = (
     Cmd("/start", "Start here, or: /start m2, all", "start", "fleet"),
     Cmd("/stop", "Stop here, or: /stop m2, all", "stop", "fleet"),
     Cmd("/events", "Pool errors, rejects, stops", "events", "fleet"),
+    Cmd("/hours", "Mining hours: /hours m2 22:00-08:30", "hours", "fleet"),
     Cmd("/help", "List commands", "help", "ui"),
     Cmd("/quit", "Quit; the miner keeps running", "quit", "ui"),
 )
@@ -144,7 +145,7 @@ ALIASES = {
 }
 
 TABS = ("Usage", "Fleet", "Config", "Logs")
-TYPED = ("/perf", "/threads", "/set", "/unset", "/pause", "/start", "/stop", "/restart")  # take arguments: /perf 4, /stop m2
+TYPED = ("/perf", "/threads", "/set", "/unset", "/pause", "/start", "/stop", "/restart", "/hours")  # take arguments: /perf 4, /stop m2
 LOG_VIEWS = ("log", "err", "events")  # e on the Logs card steps through these
 PERF_DELAY = 1.5  # + / − while mining: presses gather this long, then one restart applies them
 
@@ -362,6 +363,13 @@ def typed_hint(buf: str) -> str:
             v = pause_value(p[1])
             return f"↵ PAUSE={v} and apply it" if v else "/pause on | off | 10-3600 (seconds idle before mining again)"
         return "↵ switches it on/off · or /pause on, off, 300 (seconds idle)"
+    if p[0] == "/hours":
+        if len(p) > 2:
+            ok = control.hours_ok(p[2])
+            return f"↵ hours for {p[1]}: {p[2]}" if ok else "hours: 22:00-08:30 · 22:00-08:30,12:00-13:00 · always · off"
+        if len(p) == 2 and control.hours_ok(p[1]):
+            return f"↵ hours for this Mac: {p[1]}"
+        return "/hours [m2 | all] 22:00-08:30 | always | off   (↵ alone asks for this Mac's)"
     if p[0] in ("/start", "/stop", "/restart"):
         verb = p[0][1:]
         if len(p) > 1:
@@ -696,6 +704,15 @@ def fmt_n(v) -> str:
         return "—"
 
 
+def fmt_k(v) -> str:
+    """4,081 · 44.9k: share counts in the narrow rail."""
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v:,}" if v < 10000 else f"{v / 1000:.1f}k"
+
+
 def fmt_hugepages(val) -> str:
     """XMRig v1 API uses a bool; /2/summary uses [allocated, total]."""
     if val is True:
@@ -880,6 +897,7 @@ class App:
     rej_seen: set = field(default_factory=set)     # (ts, share #) of rejects already in the ledger
     prev_backup: Optional[bool] = None
     key_fixed: Optional[bool] = None     # --dump and the self-test: pretend the signing key is here
+    input: Optional[dict] = None         # a typed answer (hours): {"kind", "workers", "prompt", "back"}
 
     # ------------------------------------------------------------------ plumbing
     def tty_size(self) -> tuple[int, int]:
@@ -1022,6 +1040,9 @@ class App:
             if not fs or compact:
                 return here
             return f"{here} · {fs[1].get('mining', 0)} of {fs[1].get('macs', 0)} mining"
+        if a == "hours":
+            h = self.env().get("HOURS") or "off"
+            return "off here · s only" if h == "off" else f"here {h}"
         if a == "events":
             evs = self.feed_latest(1)
             if not evs:
@@ -1456,11 +1477,19 @@ class App:
                 f"{INK if st in fleet.ACTIVE else SEC}{right}{FAINT} {via:>4}{INK}")
 
     def fleet_shares(self, r: dict) -> str:
-        """Under a Mac's rail row: shares the pool has from that worker, and this run's count when the LAN has it."""
-        pool = f"{GOOD}{fmt_n(r['pool_acc'])} ✓{SEC} pool" if r.get("pool_acc") is not None else f"{SEC}— pool"
-        run = f"{FAINT} · {SEC}{fmt_n(r['acc'])} this run" if r.get("acc") is not None else ""
+        """Under a Mac's rail row: its uptime over the last 24 h (from the pool's history), the shares the
+        pool has from it, and how long an offline Mac has been gone."""
+        up = r.get("up24")
+        up_s = f"{SEC}up {up * 100:.0f}% of 24 h" if up is not None else f"{SEC}up — of 24 h"
+        col = GOOD if (up or 0) >= 0.9 else (WARN if (up or 0) > 0 else SEC)
+        up_s = f"{col}{up_s[len(SEC):]}" if up is not None else up_s
+        tail = ""
+        if r.get("state") in ("offline", "stopped", "idle") and not r.get("here") and r.get("seen"):
+            tail = f"{FAINT} · {SEC}off {fleet.age(r['seen'])}"
+        elif r.get("pool_acc") is not None:
+            tail = f"{FAINT} · {GOOD}{fmt_k(r['pool_acc'])} ✓"
         rej = f"{FAINT} · {BAD}{r['rej']} ✗" if r.get("rej") else ""
-        return f"{FAINT} └ {pool}{run}{rej}{INK}"
+        return f"{FAINT} └ {up_s}{tail}{rej}{INK}"
 
     def event_line(self, e: dict, name_w: int = 14) -> str:
         """One timed event: when · which Mac · mark + what · detail."""
@@ -1560,8 +1589,9 @@ class App:
                 gap()
                 continue
             if k == "start":
-                word = "Restarted xmrig" if e.get("restart") else "Started xmrig"
-                bullet((f"{BOLD}{word}{NOBOLD}" if not e.get("text") else f"{BOLD}xmrig{NOBOLD}{SEC} · {e['text']}{INK}") + frm(e) + at(e))
+                word = "Restarted xmrig" if (e.get("restart") or e.get("why") == "watchdog") else "Started xmrig"
+                why = {"schedule": f"{SEC} · by the hours{INK}", "watchdog": f"{WARN} · by the watchdog: it had ended with no stop{INK}"}.get(e.get("why") or "", "")
+                bullet((f"{BOLD}{word}{NOBOLD}" if not e.get("text") else f"{BOLD}xmrig{NOBOLD}{SEC} · {e['text']}{INK}") + why + frm(e) + at(e))
                 tree(f"{SEC}{e.get('cmd') or live['job'].get('cmdline') or 'caffeinate -i xmrig'}{INK}")
                 if e.get("nice"):
                     tree(f"{SEC}{e['nice']}{INK}", first=False)
@@ -1600,6 +1630,18 @@ class App:
             elif k == "mainpool":
                 bullet(f"{BOLD}Back on the main pool{NOBOLD}" + at(e))
                 tree(f"{SEC}{e.get('pool') or '—'}{INK}")
+            elif k == "remote" and e["cmd"] == "hours":
+                w, st, res = control.short(e["worker"]), e.get("state"), e.get("res") or {}
+                if st == "pending":
+                    bullet(f"{BOLD}Setting {w}'s hours{NOBOLD}{SEC} to {e.get('arg')}…{INK}" + at(e))
+                elif st == "ok":
+                    h = res.get("hours") or e.get("arg")
+                    bullet(f"{BOLD}{w}'s hours: {h}{NOBOLD}{SEC} · set from this Mac · {control.when(e.get('done') or e['ts'])}{INK}")
+                    tree(f"{SEC}{res.get('sched') or ('mines only when you press s' if h == 'off' else '—')}"
+                         f"{' · opens XMR Miner at login' if res.get('login') else ''}{INK}")
+                else:
+                    bullet(f"{WARN}Could not set {w}'s hours{INK}{SEC} · {control.when(e.get('done') or e['ts'])}{INK}", WARN)
+                    tree(f"{SEC}{res.get('error') or ' · '.join(res.get('lines') or []) or 'no answer'}{INK}")
             elif k == "remote":
                 w, cmd, st = control.short(e["worker"]), e["cmd"], e.get("state")
                 res = e.get("res") or {}
@@ -1649,7 +1691,8 @@ class App:
                 idle = pause_label(self.env()) or "the idle time"
                 bullet(f"{BOLD}Mining again{NOBOLD}{SEC} · no input for {idle} · {control.when(e['ts'])}{INK}")
             elif k == "stop":
-                bullet(f"{BOLD}Stopped{NOBOLD} after {fmt_uptime(e.get('up') or 0)}" + (f"{SEC} · {e['text']}{INK}" if e.get("text") else "") + frm(e) + at(e))
+                bullet(f"{BOLD}Stopped{NOBOLD} after {fmt_uptime(e.get('up') or 0)}" + (f"{SEC} · {e['text']}{INK}" if e.get("text") else "")
+                       + (f"{SEC} · by the hours{INK}" if e.get("why") == "schedule" else "") + frm(e) + at(e))
                 tree(f"{GOOD}{fmt_n(e.get('acc'))}{SEC} accepted · {e.get('rej') or 0} rejected · avg {fmt_hs(e.get('avg'))}{INK}")
             elif k == "laststop":
                 s = e["snap"]
@@ -1699,7 +1742,7 @@ class App:
                 col = GOOD if "accepted" in low else BAD if ("rejected" in low or "error" in low or "fail" in low) else INK
                 out.append(self.r(f"{SEC}{'  └ ' if i == 0 else '    '}{col}{ln}{INK}"))
             return out
-        body = self.card_body(tab, live)
+        body = self.card_body(tab, live, room - (4 if tight else 7))
         if tight:
             body = [ln for ln in body if plain(ln).strip()]
             if room < len(out) + len(body) + 3 and len(body) > 2:
@@ -1718,7 +1761,7 @@ class App:
         out.append(self.r(f"{FAINT}╰{'─' * (w - 2)}╯{INK}"))
         return out
 
-    def card_body(self, tab: str, live: dict) -> list[str]:
+    def card_body(self, tab: str, live: dict, room: int = 99) -> list[str]:
         def kv(k: str, v: str) -> str:
             return f"  {SEC}{(k + ':'):<13}{INK}{v}"
 
@@ -1752,19 +1795,22 @@ class App:
                 note = fr.get("note") or ""
                 if not fr["here"]:
                     note = control.ctl_label(fr, self.main) if fr.get("ctl") else (note or control.ctl_why(fr))
+                note = " · ".join(x for x in (note, self.hours_line(fr)) if x)
                 if note:
                     rows.append(f"      {SEC}└ {note}{INK}")
             key = lambda k: f"{CYAN}{k}{SEC}"  # noqa: E731
             if self.main:
-                rows += ["", f"  {key('↑↓')} pick a Mac · {key('s')} start · {key('t')} stop · {key('r')} restart{SEC} · stop and restart ask first{INK}"]
+                rows += ["", f"  {key('↑↓')} pick a Mac · {key('s')} start · {key('t')} stop · {key('r')} restart · {key('h')} hours{SEC} · t and r ask first{INK}"]
             else:
-                rows += ["", f"  {key('↑↓')} pick · {key('s')} {key('t')} {key('r')} act on this Mac · the main Mac starts and stops the others{INK}"]
-            evs = self.feed_latest(4)
+                rows += ["", f"  {key('↑↓')} pick · {key('s')} {key('t')} {key('r')} {key('h')} act on this Mac · the main Mac starts and stops the others{INK}"]
+            info = ["", f"  {SEC}LAN every 5 s · pool every 60 s · last LAN scan {fleet.age(m.get('scan_at'))} ago{INK}",
+                    f"  {SEC}On another Mac, ./bin/minerctl.sh fleet here says what this Mac can see of it{INK}"]
+            n_ev = min(4, room - len(rows) - len(info) - 2)  # recent events take what room is left
+            evs = self.feed_latest(n_ev) if n_ev > 0 else []
             if evs:
                 rows += ["", f"  {SEC}Recent events{FAINT} · /events for all{INK}"]
                 rows += ["  " + self.event_line(e, 12) for e in evs]
-            rows += ["", f"  {SEC}LAN every 5 s · pool every 60 s · last LAN scan {fleet.age(m.get('scan_at'))} ago{INK}",
-                     f"  {SEC}On another Mac, ./bin/minerctl.sh fleet here says what this Mac can see of it{INK}"]
+            rows += info
             if not m.get("token"):
                 rows.append(f"  {WARN}fleet.token is missing: this Mac and the pool only{INK}")
             return rows
@@ -1782,7 +1828,7 @@ class App:
                 thr_v = f"{thr} → {BOLD}{self.perf_target}{NOBOLD} of {cores}{SEC} · applying in a moment{INK}"
             else:
                 src = "auto" if spec == "auto" else f"THREADS={spec} · auto is {env.get('AUTO_THREADS') or '—'}"
-                thr_v = f"{thr} of {cores}  {bar(frac, 12)}  {SEC}{src}{INK}"
+                thr_v = f"{thr} of {cores}  {bar(frac, 12)}  {SEC}{src} · {frac * 100:.0f}% of this Mac{INK}"
             if run and not self.dump and str(job.get("threads")) not in ("-", thr):
                 thr_v += f"{WARN} · xmrig still runs {job.get('threads')}{INK}"
             mode_spec = env.get("MODE_SPEC") or "auto"
@@ -1794,11 +1840,12 @@ class App:
             key = lambda k: f"{CYAN}{k}{SEC}"  # noqa: E731
             rows = [
                 kv("Threads", thr_v),
-                kv("CPU", f"about {frac * 100:.0f}% of this Mac while mining" if frac else "—"),
                 kv("Mode", (env.get("MODE") or job.get("mode") or "—") + f"{SEC} · {'auto' if mode_spec == 'auto' else 'MODE=' + mode_spec}{INK}"),
                 kv("Yield", "on · other apps first, lower H/s" if yld == "on" else "off · xmrig keeps its cores"),
                 kv("Pause", f"{pause_label(env)} idle{SEC} · paused while you're at the keyboard{INK}" if pause_label(env)
                    else f"off{SEC} · mines while you use this Mac{INK}"),
+                kv("Hours", (f"off{SEC} · mines only when you press s{INK}" if (env.get("HOURS") or "off") == "off"
+                             else f"{env.get('HOURS')}{SEC} · {self.hours_line({'here': True}).split(' · ', 1)[-1]} · opens at login{INK}")),
                 kv("Algorithm", job.get("algo") or "—"),
                 kv("Pool", f"{pool}{SEC} · {'TLS' if tls else 'no TLS'}{INK}"),
                 kv("Backup", f"{backup}{SEC} · if the pool fails 5 times{INK}" if backup != "off"
@@ -1818,7 +1865,7 @@ class App:
             rows += [
                 "",
                 f"  {key('+ −')} threads · {key('a')} auto · {key('x')} max · {key('o')} eco · {key('m')} mode{INK}",
-                f"  {key('y')} yield · {key('p')} pause · {key('e')} edit machine.local{INK}",
+                f"  {key('y')} yield · {key('p')} pause · {key('h')} hours · {key('e')} edit machine.local{INK}",
                 f"  {SEC}Applies now; a running xmrig restarts (~1 min to full speed).{INK}",
             ]
             return rows
@@ -1923,6 +1970,8 @@ class App:
             text, ph = self.confirm_buf, "yes"
         elif self.mode == "ask":
             text, ph = "", "y to go ahead · n or esc to cancel"
+        elif self.mode == "input":
+            text, ph = self.buf, "22:00-08:30"
         else:
             text = self.buf if self.force_palette is None else self.force_palette
             if self.mode == "overlay":
@@ -1953,6 +2002,9 @@ class App:
             right = "offline sweep · mines nothing"
         elif self.mode == "ask":
             keys = [("y", "go ahead"), ("n", "cancel")]
+            right = ""
+        elif self.mode == "input":
+            keys = [("↵", "set"), ("esc", "cancel")]
             right = ""
         elif self.mode == "overlay":
             keys = [("←→", "cards"), ("esc", "back"), ("s", "start"), ("t", "stop")]
@@ -2000,15 +2052,20 @@ class App:
             want = len(self.palette_lines(True))
             if want > avail:
                 want = len(self.palette_lines(False))
-            pal_n = max(1, min(want or 1, 19, avail))  # 14 commands + 5 group headers
+            pal_n = max(1, min(want or 1, 20, avail))  # 15 commands + 5 group headers
         status = self.status_row(live) if (self.mode == "home" and not pal) else None
         if self.mode == "confirm":
             status = self.r(f"{SEC}• {INK}Offline sweep{SEC} · ~10 minutes · mines nothing · refuses if the miner is running · type yes{INK}")
         elif self.mode == "ask":
             status = self.r(f"{WARN}• {INK}{BOLD}{(self.ask or {}).get('text', '')}{NOBOLD}  {SEC}y / n{INK}")
+        elif self.mode == "input":
+            p_ = (self.input or {}).get("prompt", "")
+            head_, _, tail_ = p_.partition(": ")
+            status = self.r(f"{CYAN}• {INK}{BOLD}{head_}{NOBOLD}{SEC}  {tail_}{INK}")
         body_end = band_y - pal_n - (1 if status else 0) - (1 if pal else 0)  # exclusive; one spacer above a palette
         room = max(1, body_end - top)
-        if self.mode == "overlay" or (self.mode == "ask" and (self.ask or {}).get("back") == "overlay"):
+        if self.mode == "overlay" or (self.mode == "ask" and (self.ask or {}).get("back") == "overlay") \
+                or (self.mode == "input" and (self.input or {}).get("back") == "overlay"):
             body = self.card_rows(live, room)[:room]
         else:
             body = self.ledger_rows(live)[-room:]
@@ -2094,12 +2151,13 @@ class App:
         """minerctl notes each start and stop in logs/events.jsonl with why and who asked."""
         return dict(os.environ, MINER_WHY=why, MINER_BY=by)
 
-    def do_start(self, by: str = "") -> tuple:
-        """s here, or a start the main Mac sent (by = its worker). (ok, minerctl's lines)."""
-        self.add("user", text=f"s · from {control.short(by)}" if by else "s")
+    def do_start(self, by: str = "", why: str = "") -> tuple:
+        """s here, a start the main Mac sent (by = its worker), or the keeper's (why = schedule | watchdog)."""
+        why = why or ("remote" if by else "window")
+        self.add("user", text=f"s · from {control.short(by)}" if by else ({"schedule": "s · the hours begin", "watchdog": "s · watchdog"}.get(why, "s")))
         live = self.live()
         try:
-            out = subprocess.check_output([CTL, "start"], text=True, timeout=12, env=self.ctl_env("remote" if by else "window", by))
+            out = subprocess.check_output([CTL, "start"], text=True, timeout=12, env=self.ctl_env(why, by))
         except subprocess.CalledProcessError as e:
             out = e.output or "start failed"
         except Exception as e:
@@ -2117,7 +2175,7 @@ class App:
             return True, [msg]
         ok = True
         if head.startswith("Started"):
-            self.note_started(nice, by=by)
+            self.note_started(nice, by=by, why=why)
         elif head.startswith("Already running"):
             # leftover from a previous window (q does not stop xmrig). Attach; do not spawn.
             api = api_summary()
@@ -2140,7 +2198,7 @@ class App:
         self.mode = "home"
         return ok, lines
 
-    def note_started(self, nice: str = "", by: str = "", restart: bool = False) -> None:
+    def note_started(self, nice: str = "", by: str = "", restart: bool = False, why: str = "") -> None:
         """Book a fresh xmrig in the ledger: s, a command from the main Mac, or a restart."""
         self.start_ts = time.time()
         self.ds_ready_s = None
@@ -2149,7 +2207,7 @@ class App:
         self.nice_cache = None
         self.prev_backup = None
         self.drop("dsprog", "shares", "dataset", "pool")
-        self.add("start", cmd=parse_job().get("cmdline") or "", nice=nice, by=by, restart=restart)
+        self.add("start", cmd=parse_job().get("cmdline") or "", nice=nice, by=by, restart=restart, why=why)
         self.add("dsprog")
         self.prev_state = "STARTING"
 
@@ -2216,7 +2274,19 @@ class App:
             self.draw()
         self.perf_target = None
         head, rest = parts[0], parts[1:]
-        if head in ("/start", "/stop", "/restart"):
+        if head == "/hours":
+            v = rest[-1] if rest else ""
+            if not control.hours_ok(v):
+                self.say("/hours [m2 | all] 22:00-08:30 | 22:00-08:30,12:00-13:00 | always | off")
+                return
+            me = self.live()["job"].get("worker") or "this Mac"
+            names = [r["worker"] for r in self.fleet_rows()] or [me]
+            workers, why = control.match_targets(rest[0] if len(rest) > 1 else "here", names, me)
+            if why:
+                self.say(why)
+                return
+            self.fleet_hours(workers, v)
+        elif head in ("/start", "/stop", "/restart"):
             self.fleet_cmd(head[1:], " ".join(rest))
         elif head in ("/perf", "/threads"):
             self.ctl("perf", *rest[:1])
@@ -2253,12 +2323,13 @@ class App:
             return
         self.ctl("config", "apply")
 
-    def do_stop(self, by: str = "") -> tuple:
-        """t here, or a stop the main Mac sent (by = its worker). (ok, minerctl's lines)."""
-        self.add("user", text=f"t · from {control.short(by)}" if by else "t")
+    def do_stop(self, by: str = "", why: str = "") -> tuple:
+        """t here, a stop the main Mac sent (by = its worker), or the hours ending (why = schedule)."""
+        why = why or ("remote" if by else "window")
+        self.add("user", text=f"t · from {control.short(by)}" if by else ("t · the hours end" if why == "schedule" else "t"))
         live = self.live()
         try:
-            out = subprocess.check_output([CTL, "stop"], text=True, timeout=15, env=self.ctl_env("remote" if by else "window", by))
+            out = subprocess.check_output([CTL, "stop"], text=True, timeout=15, env=self.ctl_env(why, by))
         except Exception as e:
             out = str(e)
         lines = [ln for ln in out.splitlines() if ln.strip()]
@@ -2268,7 +2339,7 @@ class App:
             tot = (api.get("hashrate") or {}).get("total") or []
             avg = next((v for v in (tot[2] if len(tot) > 2 else None, tot[1] if len(tot) > 1 else None, live.get("hs")) if v), None)
             self.drop("dsprog", "shares")
-            self.add("stop", up=live.get("up") or 0, acc=live.get("acc") or 0, rej=live.get("rej") or 0, avg=avg, by=by)
+            self.add("stop", up=live.get("up") or 0, acc=live.get("acc") or 0, rej=live.get("rej") or 0, avg=avg, by=by, why=why)
             for ln in lines:
                 if ln.startswith("Desktop summary:"):
                     self.add("summary", path=ln.split(":", 1)[1].strip())
@@ -2280,7 +2351,7 @@ class App:
         self.mode = "home"
         return ok, lines
 
-    def do_restart(self, by: str = "") -> tuple:
+    def do_restart(self, by: str = "", why: str = "") -> tuple:
         """r on the Fleet card for this Mac, /restart, or a restart the main Mac sent."""
         self.add("user", text=f"restart · from {control.short(by)}" if by else "/restart")
         if not self.dump:
@@ -2300,6 +2371,69 @@ class App:
         return False, lines
 
     # ------------------------------------------------------------------ the fleet: commands between Macs
+    def hours_line(self, r: dict) -> str:
+        """A Mac's mining hours and what they do next ('hours 22:00-08:30 · mining until 08:30'), with its 24 h uptime."""
+        up = r.get("up24")
+        up_s = f" · up {up * 100:.0f}% of 24 h" if up is not None else ""
+        if r.get("here"):
+            h = self.env().get("HOURS") or "off"
+            label = "" if self.dump else control.schedule_label(h, control.own_tail(), self.live()["state"] != "STOPPED")
+        else:
+            ctl = r.get("ctl") or {}
+            if "hours" not in ctl:
+                return up_s[3:] if up_s else ""
+            h, label = ctl.get("hours") or "off", ctl.get("sched") or ""
+        if h == "off":
+            return f"hours off · s only{up_s}"
+        return f"hours {h}" + (f" · {label}" if label and label != "always" else "") + up_s
+
+    def ask_hours(self, workers: list) -> None:
+        """h on the Fleet or Config card, or /hours alone: type the hours for these Macs."""
+        names = ", ".join(control.short(w) for w in workers)
+        self.input = {"kind": "hours", "workers": workers, "back": self.mode if self.mode in ("home", "overlay") else "home",
+                      "prompt": f"Hours for {names}: 22:00-08:30 · 22:00-08:30,12:00-13:00 · always · off"}
+        self.buf = ""
+        self.mode = "input"
+
+    def on_key_input(self, key: str) -> bool:
+        i = self.input or {}
+        if key == "quit":
+            return False
+        if key == "esc":
+            self.mode, self.input, self.buf = i.get("back") or "home", None, ""
+            self.say("Cancelled.")
+            return True
+        if key == "back":
+            self.buf = self.buf[:-1]
+            return True
+        if key == "enter":
+            v = self.buf.strip()
+            if not control.hours_ok(v):
+                self.input = dict(i, prompt="Not valid. " + i.get("prompt", "").split(": ", 1)[-1])
+                return True
+            self.mode, self.input, self.buf = i.get("back") or "home", None, ""
+            self.add("user", text=f"/hours {' '.join(control.short(w) for w in i['workers'])} {v}")
+            self.fleet_hours(i["workers"], v)
+            return True
+        if key and len(key) == 1:
+            self.buf += key
+        return True
+
+    def fleet_hours(self, workers: list, v: str) -> None:
+        """This Mac: machine.local via minerctl config. Another Mac: a signed hours command (main Mac)."""
+        rows = self.fleet_rows()
+        if not any(r["here"] for r in rows):
+            rows.insert(0, {"worker": self.live()["job"].get("worker") or "this Mac", "here": True, "state": "stopped"})
+        have_key = self.key_fixed if self.key_fixed is not None else os.path.isfile(control.KEY)
+        go, skip = control.plan("hours", workers, rows, self.main, have_key)
+        if skip:
+            self.say(*[f"{control.short(w)}: {why}" for w, why in skip])
+        for r in go:
+            if r["here"]:
+                self.ctl(*(["config", "unset", "HOURS"] if v == "off" else ["config", "set", f"HOURS={v}"]))
+            else:
+                self.remote_send("hours", r, v)
+
     def picked_row(self, rows: list) -> Optional[dict]:
         """The Fleet card's picked Mac (by name, so a re-sort by hashrate does not move the pick)."""
         if not rows:
@@ -2355,15 +2489,15 @@ class App:
             else:
                 self.remote_send(cmd, r)
 
-    def remote_send(self, cmd: str, r: dict) -> None:
+    def remote_send(self, cmd: str, r: dict, arg: str = "") -> None:
         """One signed command, sent from a thread; the answer comes back through remote_q."""
-        ev = self.add("remote", cmd=cmd, worker=r["worker"], state="pending")
+        ev = self.add("remote", cmd=cmd, worker=r["worker"], state="pending", arg=arg)
         if self.dump:
             return
         host, w = r.get("host") or "", r["worker"]
 
         def run() -> None:
-            self.remote_q.put((ev, control.send(host, w, cmd, FLEET_TOKEN)))  # type: ignore[attr-defined]
+            self.remote_q.put((ev, control.send(host, w, cmd, FLEET_TOKEN, arg=arg)))  # type: ignore[attr-defined]
 
         threading.Thread(target=run, name="send", daemon=True).start()
 
@@ -2406,8 +2540,9 @@ class App:
             mode, tab = self.mode, self.tab
             if mode == "ask":
                 self.ask, mode = None, "home"
-            cmd, by = req["cmd"], req.get("from") or "the main Mac"
-            ok, lines = {"start": self.do_start, "stop": self.do_stop, "restart": self.do_restart}[cmd](by=by)
+            why = req.get("why") or ""
+            cmd, by = req["cmd"], req.get("from") or ("" if why else "the main Mac")
+            ok, lines = {"start": self.do_start, "stop": self.do_stop, "restart": self.do_restart}[cmd](by=by, why=why)
             self.mode, self.tab = mode, tab
             self.live_cache = None
             after = self.live()
@@ -2415,7 +2550,7 @@ class App:
                                                   "up": before.get("up"), "acc": before.get("acc"), "rej": before.get("rej")})
             self.draw()
 
-    LEDGER_KINDS = ("error", "reject", "backup", "pool", "start", "stop", "exit", "denied")
+    LEDGER_KINDS = ("error", "reject", "backup", "pool", "start", "stop", "exit", "denied", "hours", "watchdog")
 
     def book_feed(self) -> None:
         """Main Mac: the other Macs' new events get ledger lines (an outage that grows updates its line)."""
@@ -2516,6 +2651,8 @@ class App:
                 self.do_restart()
         elif action == "events":
             self.open_overlay("Logs", "events")
+        elif action == "hours":
+            self.ask_hours([self.live()["job"].get("worker") or "this Mac"])
         elif action == "bench":
             self.add("user", text="/bench")
             self.mode = "confirm"
@@ -2651,14 +2788,14 @@ class App:
             self.say("Unknown command. Type / for the list.")
             return True
         if key and len(key) == 1:
-            if self.buf.startswith("/") and key.isdigit() and key != "0":
+            # 1-9 pick a palette row only while a command name is being typed; after a space they are
+            # its argument (/perf 4, /pause 300, /hours m2 22:00-08:30), never swallowed
+            if self.buf.startswith("/") and " " not in self.buf and key.isdigit() and key != "0" and int(key) <= len(ms):
                 i = int(key) - 1
-                if i < len(ms):
-                    self.buf = ""
-                    self.sel = 0
-                    self.note_recent(ms[i].action)
-                    return self.run_action(ms[i].action)
-                return True
+                self.buf = ""
+                self.sel = 0
+                self.note_recent(ms[i].action)
+                return self.run_action(ms[i].action)
             self.buf += key
             self.sel = 0
         return True
@@ -2673,6 +2810,10 @@ class App:
         if TABS[self.tab] == "Fleet":
             if key in ("up", "down"):
                 self.pick_step(-1 if key == "up" else 1)
+                return True
+            if key in ("h", "H"):
+                row = self.picked_row(self.fleet_rows())
+                self.ask_hours([row["worker"]] if row else [self.live()["job"].get("worker") or "this Mac"])
                 return True
             if key in ("s", "S", "t", "T", "r", "R"):
                 cmd = {"s": "start", "t": "stop", "r": "restart"}[key.lower()]
@@ -2717,6 +2858,9 @@ class App:
                 return True
             if key == "e":
                 self.do_edit()
+                return True
+            if key in ("h", "H"):
+                self.ask_hours([self.live()["job"].get("worker") or "this Mac"])
                 return True
             env = self.env()
             typed = {
@@ -2830,6 +2974,8 @@ class App:
                     ok = self.on_key_overlay(key)
                 elif self.mode == "ask":
                     ok = self.on_key_ask(key)
+                elif self.mode == "input":
+                    ok = self.on_key_input(key)
                 elif self.mode == "confirm":
                     ok = self.on_key_confirm(key)
                 else:
@@ -2884,15 +3030,15 @@ def _demo_fleet() -> tuple:
     now = time.time()
     base = {"hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "note": "", "host": "", "pool_acc": None,
             "ctl": None, "ctl_st": None}
-    hello = {"v": 1, "worker": "minerv3-m2-8gb", "window": True, "xmrig": True, "can": ["start", "stop", "restart"],
-             "key": control.fingerprint(control.pub_line())}
+    hello = {"v": 1, "worker": "minerv3-m2-8gb", "window": True, "xmrig": True, "can": ["start", "stop", "restart", "hours"],
+             "key": control.fingerprint(control.pub_line()), "hours": "always", "sched": "always", "login": True}
     rows = [
         dict(base, worker="minerv3-m4-16gb", here=True, host="127.0.0.1", via="lan", state="mining", hs=4178.4,
-             hs15=4166.1, acc=1945, rej=0, up=58080, pool_hs=4012.0, lts=now - 12, pool_acc=4081),
+             hs15=4166.1, acc=1945, rej=0, up=58080, pool_hs=4012.0, lts=now - 12, pool_acc=4081, up24=0.38),
         dict(base, worker="minerv3-m2-8gb", here=False, host="192.0.2.23", via="lan", state="mining", hs=3237.1,
-             hs15=3190.0, acc=812, rej=0, up=18120, pool_hs=3237.1, lts=now - 4, pool_acc=19695, ctl=hello, ctl_st="ok"),
+             hs15=3190.0, acc=812, rej=0, up=18120, pool_hs=3237.1, lts=now - 4, pool_acc=19695, ctl=hello, ctl_st="ok", up24=1.0),
         dict(base, worker="minerv3-i7-6700hq-16gb", here=False, via="pool", state="pool", hs=None, pool_hs=687.2,
-             lts=now - 16, pool_acc=395, note="not found on this LAN yet: update it (reopen XMR Miner there, then s)"),
+             lts=now - 16, pool_acc=395, note="not found on this LAN yet: update it (reopen XMR Miner there, then s)", up24=0.0),
     ]
     meta = {"total": 4178.4 + 3237.1 + 687.2, "mining": 3, "macs": 3, "pool": "ok", "pool_at": now - 40,
             "pool_total": 7936.3, "scan_at": now - 180, "token": True, "at": now,
@@ -3141,7 +3287,7 @@ def self_test() -> int:
     check("palette fleet status (compact beside the rail)", " 2 /fleet" in pal and "3/3 · 8,103 H/s" in pal)
     wide = dump_frame("slash", 147, 58, strip=True)  # the launcher size: a 109-col pane beside the rail
     check("palette fleet status (wide)", "3 of 3 mining · 8,103 H/s" in wide)
-    check("palette hints row", "1 of 14" in pal and "1–9 run" in pal)
+    check("palette hints row", "1 of 15" in pal and "1–9 run" in pal)
     pal2 = dump_frame("palette", strip=True)
     pal_rows = [ln for ln in pal2.split("\n") if "/usage" in ln or ln.strip() in ("miner", "actions", "ui", "recent")]
     check("palette filter is flat + selected", not any(ln.strip() in ("miner", "actions", "ui") for ln in pal2.split("\n")) and "▎1 /usage" in pal2 and "1 of 1" in pal2)
@@ -3157,7 +3303,7 @@ def self_test() -> int:
     check("usage card", "› /usage" in usage and "XMR Miner · usage" in usage and "Hashrate:" in usage and "[" in usage and "Windows:" in usage and "Cadence:" in usage and "Uptime:      16h 08m 00s" in usage)
     config = dump_frame("config", strip=True)
     check("config card", "Algorithm:" in config and "Overrides:" in config and "+ − threads" in config and "e edit" in config)
-    check("config threads row", "Threads:     10 of 10" in config and "]  auto" in config and "about 100% of this Mac" in config)
+    check("config threads row", "Threads:     10 of 10" in config and "]  auto · 100% of this Mac" in config)
     check("config footer keys", "+− threads" in config and "e edit" in config)
     check("typed hints", typed_hint("/perf 4") == "↵ threads → 4" and "KEY=value" in typed_hint("/set") and typed_hint("/usage") == "")
     check("alias /perf opens config", resolve_action("/perf", None) == "config" and resolve_action("/threads", None) == "config")
@@ -3253,11 +3399,11 @@ def self_test() -> int:
     check("rail balance under pool (main Mac)", any("│  balance" in ln for ln in tall) and any("0.001716 XMR due" in ln for ln in tall)
           and any("] 0.6% to payout" in ln for ln in tall) and any("payout at 0.3 XMR · 0 paid" in ln for ln in tall)
           and next(i for i, ln in enumerate(tall) if "│  pool" in ln) < next(i for i, ln in enumerate(tall) if "│  balance" in ln))
-    check("rail fleet shares (main Mac)", any("└ 19,695 ✓ pool · 812 this run" in ln for ln in tall)
-          and any("└ 395 ✓ pool" in ln for ln in tall) and any("└ 4,081 ✓ pool · 1,945 this run" in ln for ln in tall))
+    check("rail fleet uptime lines (main Mac)", any("└ up 38% of 24 h · 4,081 ✓" in ln for ln in tall)
+          and any("└ up 100% of 24 h · 19.7k ✓" in ln for ln in tall) and any("└ up 0% of 24 h · 395 ✓" in ln for ln in tall))
     app_fw = demo_app("home", 147, 58); app_fw.main = False
     fw = [plain(x) for x in app_fw.compose(app_fw.live())]
-    check("follower rail: no balance, no share lines", not any("balance" in ln or "✓ pool" in ln for ln in fw)
+    check("follower rail: no balance, no share lines", not any("balance" in ln or "of 24 h" in ln for ln in fw)
           and any("│  fleet" in ln for ln in fw))
     app_nf = demo_app("home", 147, 58); app_nf.fleet_fixed = None
     check("rail fleet before the first poll", any("│  fleet" in ln and "looking…" in ln for ln in (plain(x) for x in app_nf.compose(app_nf.live()))))
@@ -3285,8 +3431,8 @@ def self_test() -> int:
     fl2 = [plain(x) for x in (lambda a: (setattr(a, "fleet_pick", "minerv3-m2-8gb"), a.compose(a.live()))[1])(demo_app("fleet", 147, 58))]
     fl2s = "\n".join(fl2)
     check("fleet card: the pick marker follows the picked Mac", any("▸● minerv3-m2-8gb" in ln for ln in fl2) and not any("▸● minerv3-m4" in ln for ln in fl2))
-    check("fleet card: what the main Mac can do to each Mac", "└ XMR Miner open there · s start · t stop · r restart" in fl2s
-          and "↑↓ pick a Mac · s start · t stop · r restart" in fl2s)
+    check("fleet card: what the main Mac can do to each Mac", "└ XMR Miner open there · hours always · up 100% of 24 h" in fl2s
+          and "↑↓ pick a Mac · s start · t stop · r restart · h hours" in fl2s)
     check("fleet card: recent events with times", "Recent events" in fl2s and "m2-8gb" in fl2s and "Stopped from m4-16gb" in fl2s)
     check("fleet footer keys", "↑↓ pick   s start   t stop   r restart   esc back" in fl2s)
     ev_frame = [plain(x) for x in (lambda a: (setattr(a, "log_which", "events"), a.compose(a.live()))[1])(demo_app("logs", 147, 58))]
@@ -3344,7 +3490,7 @@ def self_test() -> int:
     check("a follower cannot stop another Mac", a.mode == "home" and "only the main Mac" in "\n".join(plain(x) for x in a.compose(a.live())))
     a = demo_app("fleet")
     calls: list = []
-    a.do_stop = lambda by="": calls.append(("stop", by)) or (True, [])  # type: ignore
+    a.do_stop = lambda by="", why="": calls.append(("stop", by)) or (True, [])  # type: ignore
     a.on_key_overlay("t")
     check("t on the Fleet card with this Mac picked stops this Mac (no question)", calls == [("stop", "")] and a.mode == "overlay")
     a.on_key_overlay("down")
@@ -3388,7 +3534,7 @@ def self_test() -> int:
         c.dump = False
         c.draw = lambda *a, **k: None  # type: ignore
         got: list = []
-        c.do_start = lambda by="": got.append(by) or (True, ["Started."])  # type: ignore
+        c.do_start = lambda by="", why="": got.append(by) or (True, ["Started."])  # type: ignore
         control.write_json(os.path.join(control.INBOX, "a" * 24 + ".json"), {"cmd": "start", "from": "minerv3-m4-16gb", "ts": time.time()})
         c.inbox_at = 0
         c.poll_inbox()
@@ -3409,6 +3555,66 @@ def self_test() -> int:
     finally:
         subprocess.check_output = real_co  # type: ignore
     check("a stray line before Started. is still a start", okd and any(e["k"] == "start" for e in d.events) and not any(e["k"] == "out" for e in d.events))
+    # hours, uptime, keeper lines
+    tall2 = [plain(x) for x in (lambda a: a.compose(a.live()))(demo_app("fleet", 147, 58))]
+    t2s = "\n".join(tall2)
+    check("fleet card: hours per Mac with 24 h uptime", "└ hours off · s only · up 38% of 24 h" in t2s and "hours always · up 100% of 24 h" in t2s
+          and "h hours" in t2s)
+    off = dict(_demo_fleet()[0][2], state="offline", seen=time.time() - 9 * 86400, pool_acc=None)
+    check("rail: an offline Mac says how long", "└ up 0% of 24 h · off 9d" in plain(demo_app("home").fleet_shares(off)))
+    a = demo_app("fleet")
+    a.fleet_pick = "minerv3-m2-8gb"
+    a.on_key_overlay("h")
+    check("h on the Fleet card asks for the picked Mac's hours", a.mode == "input" and a.input["workers"] == ["minerv3-m2-8gb"])
+    frame_in = "\n".join(plain(x) for x in a.compose(a.live()))
+    check("the hours prompt row", "• Hours for m2-8gb  22:00-08:30 · 22:00-08:30,12:00-13:00 · always · off" in frame_in
+          and "↵ set   esc cancel" in frame_in and all(vis_len(x) == 110 for x in a.compose(a.live())))
+    for ch in "25:00-01:00":
+        a.on_key_input(ch)
+    a.on_key_input("enter")
+    check("bad hours are refused in place", a.mode == "input" and a.input["prompt"].startswith("Not valid."))
+    a.buf = ""
+    for ch in "22:00-08:30":
+        a.on_key_input(ch)
+    a.on_key_input("enter")
+    rem = [e for e in a.events if e["k"] == "remote"]
+    back_mode = a.mode
+    a.mode = "home"
+    check("↵ sends the hours (pending line), back on the card", back_mode == "overlay" and rem and rem[-1]["cmd"] == "hours"
+          and rem[-1]["arg"] == "22:00-08:30" and "Setting m2-8gb's hours to 22:00-08:30…" in "\n".join(plain(x) for x in a.compose(a.live())))
+    a.remote_q.put((rem[-1], {"ok": True, "hours": "22:00-08:30", "sched": "starts 22:00", "login": True}))
+    a.drain_remote()
+    a.mode = "home"
+    hs_frame = "\n".join(plain(x) for x in a.compose(a.live()))
+    check("the answer: hours + what they do next", "m2-8gb's hours: 22:00-08:30 · set from this Mac" in hs_frame
+          and "└ starts 22:00 · opens XMR Miner at login" in hs_frame)
+    a, calls = ctl_app("RUNNING")
+    a.buf = "/hours 22:00-08:30"; a.on_key_home("enter")
+    a.buf = "/hours here off"; a.on_key_home("enter")
+    a.buf = "/hours m4 25:00-01:00"; a.on_key_home("enter")
+    check("/hours for this Mac → minerctl config", calls == [("config", "set", "HOURS=22:00-08:30"), ("config", "unset", "HOURS")])
+    a, calls = ctl_app("RUNNING")
+    a.mode = "overlay"; a.tab = TABS.index("Config")
+    a.on_key_overlay("h")
+    check("h on the Config card asks for this Mac's hours", a.mode == "input" and a.input["workers"] == ["minerv3-m4-16gb"])
+    check("config card hours row", "Hours:       off · mines only when you press s" in config and "h hours" in config)
+    k = demo_app("home", 147, 58)
+    k.add("start", cmd="caffeinate -i xmrig", why="schedule")
+    k.add("stop", up=3600, acc=100, rej=0, avg=4200.0, why="schedule")
+    k.add("start", cmd="caffeinate -i xmrig", why="watchdog")
+    kf = "\n".join(plain(x) for x in k.compose(k.live()))
+    check("keeper lines: by the hours / by the watchdog", "• Started xmrig · by the hours · " in kf and "· by the hours · " in kf.split("• Stopped after 1h 0m")[1].split("\n")[0]
+          and "• Restarted xmrig · by the watchdog: it had ended with no stop · " in kf)
+    a, calls = ctl_app("RUNNING")
+    for text in ("/perf 4", "/pause 300", "/hours 22:00-08:30"):
+        for ch in text:
+            a.on_key_home(ch)
+        a.on_key_home("enter")
+    check("typed key by key: digits after a space are the argument", calls == [("perf", "4"), ("config", "set", "PAUSE=300"),
+                                                                              ("config", "set", "HOURS=22:00-08:30")])
+    a = demo_app("home"); a.buf = "/"
+    a.on_key_home("3")
+    check("a digit right after / still runs that row", a.mode == "overlay" and a.buf == "")
     check("typed hints for the fleet", typed_hint("/stop m2") == "↵ stop m2 (asks first)" and typed_hint("/start") == "↵ start this Mac · or /start m2, /start all")
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
     return 0 if fails == 0 else 1
