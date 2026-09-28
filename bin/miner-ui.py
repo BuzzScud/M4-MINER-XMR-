@@ -303,6 +303,109 @@ def api_get(url: str) -> Optional[dict]:
     return d if st == "ok" else None
 
 
+# ---------------------------------------------------------------------- the Mac's memory (right end of the key bar)
+GIB = 2 ** 30
+DATASET_B = {"fast": 2336 * 2 ** 20, "light": 256 * 2 ** 20}  # fast: 2080 MB dataset + 256 MB cache (the 1178 huge pages)
+MEM_EVERY = 5.0  # s between measurements (in a thread: sysctl, vm_stat, ps take ~30 ms)
+
+
+def parse_vm_stat(text: str) -> dict:
+    """vm_stat's counts in bytes, by label ("Pages free" → bytes)."""
+    m = re.search(r"page size of (\d+) bytes", text)
+    page = int(m.group(1)) if m else 16384
+    return {k.strip().strip('"'): int(v) * page for k, v in re.findall(r"^([^:\n]+):\s+(\d+)\.?$", text, re.M)}
+
+
+def sysctl(name: str) -> str:
+    try:
+        return subprocess.run(["sysctl", "-n", name], capture_output=True, text=True, timeout=2).stdout.strip()
+    except Exception:
+        return ""
+
+
+def mac_memory() -> Optional[dict]:
+    """The Mac's memory the way Activity Monitor (and Agentic Coder's footer) count it: free = free + inactive +
+    speculative + purgeable pages; plus compressed, swap in use, the pressure level (1 fine, 2 tight, 4 critical)
+    and xmrig's own size. None when it cannot be read."""
+    try:
+        vm = parse_vm_stat(subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2).stdout)
+        total = int(sysctl("hw.memsize") or 0)
+    except Exception:
+        return None
+    if not total or "Pages free" not in vm:
+        return None
+    sw = re.search(r"used = ([\d.]+)([KMG])", sysctl("vm.swapusage"))
+    lvl = sysctl("kern.memorystatus_vm_pressure_level")
+    xm = 0
+    try:
+        for ln in subprocess.run(["ps", "-Ao", "rss=,comm="], capture_output=True, text=True, timeout=2).stdout.splitlines():
+            p = ln.split(None, 1)
+            if len(p) == 2 and p[0].isdigit() and os.path.basename(p[1].strip()) == "xmrig":
+                xm += int(p[0]) * 1024
+    except Exception:
+        pass
+    return {"total": total, "avail": sum(vm.get(k, 0) for k in ("Pages free", "Pages inactive", "Pages speculative", "Pages purgeable")),
+            "compressed": vm.get("Pages occupied by compressor", 0),
+            "swap": float(sw.group(1)) * {"K": 2 ** 10, "M": 2 ** 20, "G": 2 ** 30}[sw.group(2)] if sw else 0.0,
+            "level": int(lvl) if lvl.isdigit() else 1, "xmrig": xm or None}
+
+
+def mem_verdict(m: dict, need: int) -> tuple:
+    """(fine | tight | squeezed, colour) for mining: room for the dataset (when xmrig is not holding it yet),
+    and is macOS squeezing memory. Critical pressure or under 0.5 GB free = squeezed; pressure 2 or under
+    0.75 GB spare beyond what the dataset needs = tight."""
+    if m["level"] >= 4 or m["avail"] < 0.5 * GIB:
+        return "squeezed", BAD
+    if m["level"] == 2 or m["avail"] < (0 if m.get("xmrig") else need) + 0.75 * GIB:
+        return "tight", WARN
+    return "fine", GOOD
+
+
+def gib_s(b: float) -> str:
+    """Activity Monitor's GB (2^30): 16 for 16 GB, 5.4 for the rest."""
+    v = b / GIB
+    return f"{v:.0f}" if v >= 3.95 and abs(v - round(v)) < 0.05 else f"{v:.1f}"
+
+
+def mem_right(right: str, room: int, m: Optional[dict], need: int = DATASET_B["fast"]) -> str:
+    """The key bar's right end with the Mac's memory after it: the longest wording that fits `room`
+    (a line the UI has to cut loses its colours), down to just the dot and the free memory."""
+    if not m:
+        return right
+    word, col = mem_verdict(m, need)
+    dot, free = f"{col}●{SEC}", f"{INK}{gib_s(m['avail'])} GB{SEC} free"
+    extra = f" · xmrig {gib_s(m['xmrig'])}" if m.get("xmrig") else (f" · dataset needs {gib_s(need)}" if word != "fine" else "")
+    swap = f" · swap {gib_s(m['swap'])}" if m["swap"] > 0.1 * GIB else ""
+    # only the speed's and the pause's detail may go ("4,178 H/s", "paused"); a pending restart keeps its countdown
+    lean = right.split(" · ")[0] if re.match(r"^([\d,]+ H/s|paused) · ", right) else right
+    sep = "   " if right else ""
+    for c in (f"{right}{sep}mem {dot} {free} of {gib_s(m['total'])}{extra}{swap}",
+              f"{right}{sep}mem {dot} {free} of {gib_s(m['total'])}{extra}",
+              f"{right} · {dot} {free}" if right else f"{dot} {free}", f"{lean} · {dot} {free}" if lean else f"{dot} {free}"):
+        if vis_len(c) <= room:
+            return c
+    return right if vis_len(right) <= room else f"{dot} {free}"
+
+
+class MemWatcher:
+    """mac_memory() every MEM_EVERY s in a thread: the draw loop only reads the last answer."""
+
+    def __init__(self) -> None:
+        self.snap: Optional[dict] = None
+        threading.Thread(target=self._run, name="memory", daemon=True).start()
+
+    def _run(self) -> None:
+        while True:
+            try:
+                self.snap = mac_memory()
+            except Exception:
+                pass
+            time.sleep(MEM_EVERY)
+
+    def latest(self) -> Optional[dict]:
+        return self.snap
+
+
 def api_summary() -> Optional[dict]:
     return api_get(API)
 
@@ -883,6 +986,8 @@ class App:
     _clear_next: bool = False
     fleet_fixed: Optional[tuple] = None  # canned (rows, meta) for --dump and the self-test
     fleet_w: Optional[object] = None     # fleet.Watcher, started on the first frame
+    mem_fixed: Optional[dict] = None     # canned memory for --dump and the self-test
+    mem_w: Optional[object] = None       # MemWatcher: the Mac's memory for the key bar, every 5 s
     perf_target: Optional[int] = None    # + / − pending while mining (applied after PERF_DELAY)
     perf_at: float = 0.0
     env_cache: Optional[tuple] = None    # (ts, machine_env())
@@ -1151,6 +1256,16 @@ class App:
             except Exception:
                 return None
         return self.fleet_w.latest()  # type: ignore[union-attr]
+
+    def mem_latest(self) -> Optional[dict]:
+        """The Mac's memory for the key bar (a thread measures it every 5 s). Never blocks."""
+        if self.mem_fixed is not None:
+            return self.mem_fixed
+        if self.dump:
+            return None
+        if self.mem_w is None:
+            self.mem_w = MemWatcher()
+        return self.mem_w.latest()  # type: ignore[union-attr]
 
     def fleet_rows(self) -> list:
         fs = self.fleet_latest()
@@ -2041,6 +2156,8 @@ class App:
             else:
                 right = "not mining"
         left = " " + "   ".join(f"{INK}{k} {SEC}{v}" for k, v in keys) + INK
+        need = DATASET_B["light"] if (live.get("job") or {}).get("mode") == "light" else DATASET_B["fast"]
+        right = mem_right(right, self.cols - vis_len(left) - 2, self.mem_latest(), need)
         return fit_row(left, f"{SEC}{right}{INK}", self.cols)
 
     # ------------------------------------------------------------------ frame
@@ -3101,6 +3218,9 @@ def demo_app(kind: str, cols: int = 110, rows: int = 36) -> App:
         live = dict(live, api=api, hs=None, paused=True)
     app.fixed_live = live
     app.fleet_fixed = _demo_fleet()
+    # the demo miner holds its dataset (2.4 GB) on a 16 GB Mac with room: "mem ● 5.4 GB free of 16 · xmrig 2.4"
+    app.mem_fixed = {"total": 16 * GIB, "avail": 5.4 * GIB, "compressed": 0.6 * GIB, "swap": 0.0, "level": 1,
+                     "xmrig": None if stopped else 2.42 * GIB}
     app.feed_fixed = _demo_events()
     app.key_fixed = True
     app.main = True
@@ -3687,6 +3807,44 @@ def self_test() -> int:
     check("a refused token says so instead of a dataset bar that never ends",
           "its API refuses this window's fleet token" in refused and "Building the RandomX dataset" not in refused
           and "Building the RandomX dataset" in building)
+    # the memory at the right end of the key bar
+    vm_m4 = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                                3163.\n"
+             "Pages active:                             66358.\nPages inactive:                           59624.\n"
+             "Pages speculative:                         5698.\nPages purgeable:                              0.\n"
+             '"Translation faults":                 703164307.\nPages occupied by compressor:            159014.\n')
+    pv = parse_vm_stat(vm_m4)
+    check("vm_stat parse (16 KB pages)", pv["Pages free"] == 3163 * 16384 and pv["Pages occupied by compressor"] == 159014 * 16384
+          and pv["Translation faults"] == 703164307 * 16384)
+    check("vm_stat parse (Intel, 4 KB pages)", parse_vm_stat("Mach Virtual Memory Statistics: (page size of 4096 bytes)\n"
+                                                             "Pages free:     100.\n")["Pages free"] == 409600)
+    mm = {"total": 16 * GIB, "avail": 5.4 * GIB, "compressed": 0.6 * GIB, "swap": 0.0, "level": 1, "xmrig": None}
+    fast = DATASET_B["fast"]
+    check("verdict: room for the dataset = fine", mem_verdict(mm, fast)[0] == "fine")
+    check("verdict: 1.8 GB free, stopped = tight (the 2.3 GB dataset needs more)", mem_verdict(dict(mm, avail=1.8 * GIB), fast)[0] == "tight")
+    check("verdict: the same 1.8 GB while xmrig already holds its dataset = fine", mem_verdict(dict(mm, avail=1.8 * GIB, xmrig=2.4 * GIB), fast)[0] == "fine")
+    check("verdict: pressure 2 = tight, pressure 4 or under 0.5 GB = squeezed", mem_verdict(dict(mm, level=2), fast)[0] == "tight"
+          and mem_verdict(dict(mm, level=4), fast)[0] == "squeezed" and mem_verdict(dict(mm, avail=0.4 * GIB, xmrig=1), fast)[0] == "squeezed")
+    check("verdict: light mode needs 256 MB", mem_verdict(dict(mm, avail=1.2 * GIB), DATASET_B["light"])[0] == "fine")
+    check("GB like Activity Monitor", gib_s(16 * GIB) == "16" and gib_s(8 * GIB) == "8" and gib_s(5.43 * GIB) == "5.4" and gib_s(0.7 * GIB) == "0.7")
+    tight = dict(mm, avail=1.8 * GIB, swap=2.1 * GIB)
+    check("mem: the full line when there is room", plain(mem_right("not mining", 80, tight)) == "not mining   mem ● 1.8 GB free of 16 · dataset needs 2.3 · swap 2.1")
+    check("mem: then without the swap, then only the dot and what is free",
+          plain(mem_right("not mining", 60, tight)) == "not mining   mem ● 1.8 GB free of 16 · dataset needs 2.3"
+          and plain(mem_right("not mining", 50, tight)) == "not mining · ● 1.8 GB free"
+          and plain(mem_right("paused · you're active", 36, mm)) == "paused · ● 5.4 GB free"
+          and plain(mem_right("threads 3 → 5 · restarting in 1s", 40, mm)) == "threads 3 → 5 · restarting in 1s"
+          and plain(mem_right("4,178 H/s · 99% of peak", 42, mm)) == "4,178 H/s · 99% of peak · ● 5.4 GB free"
+          and plain(mem_right("4,178 H/s · 99% of peak", 28, mm)) == "4,178 H/s · ● 5.4 GB free")
+    check("mem: nothing measured = the bar as it was", mem_right("not mining", 80, None) == "not mining")
+    fits = True
+    for kind in ("home", "home-stopped", "home-paused", "fleet", "config"):
+        for c_, r_ in ((147, 58), (110, 36), (100, 30), (90, 24)):
+            raw = demo_app(kind, c_, r_).compose(demo_app(kind, c_, r_).live())[-1]
+            fits = fits and vis_len(raw) == c_ and "…" not in plain(raw) and "5.4 GB" in plain(raw) and "\033[38;5;41m●" in raw
+    check("key bar: memory fits every mode at 90–147 columns, whole and in colour", fits)
+    check("key bar at the launcher size", "4,178 H/s · 99% of peak   mem ● 5.4 GB free of 16 · xmrig 2.4" in dump_frame("home", 147, 58, strip=True))
+    real = mac_memory()
+    check("mac_memory reads this Mac", real is None or (real["total"] > 0 and 0 <= real["avail"] <= real["total"] and real["level"] in (1, 2, 4)))
     check("remote commands use the token each Mac answers to (old until it gets the new one)",
           sorted(sent) == [("10.0.0.2", "stop", "old-token"), ("10.0.0.3", "stop", "new-token")])
     print("self-test", "passed" if fails == 0 else f"{fails} failed")

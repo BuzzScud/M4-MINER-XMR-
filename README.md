@@ -148,6 +148,13 @@ only on `s`. Colors are the "Material" palette (9 of `~/Desktop/XMR Miner — Ra
 actions, a lighter blue for data, Google green/red/yellow only for state, on a #202124 ground — the UI asks Terminal for
 that ground with OSC 11 on start and restores your profile on exit. The dock launcher opens 147×58.
 
+The right end of the key bar also shows the Mac's memory, measured every 5 s: `mem ● 5.4 GB free of 16 · xmrig 2.4`
+(free counted like Activity Monitor: free + inactive + speculative + purgeable). The dot is about mining: green
+**fine**, yellow **tight** (memory pressure is up, or less than 0.75 GB spare beyond the 2.3 GB dataset while the
+miner is stopped: `dataset needs 2.3`), red **squeezed** (critical pressure or under 0.5 GB free). macOS compressing
+or swapping the dataset is what slows RandomX, so a yellow or red dot is the first thing to check when H/s drops.
+In a narrower window it shortens to `● 5.4 GB free`; while a thread change counts down, the countdown wins.
+
 The job file passes `--log-file=logs/xmrig.log`, so xmrig is the only writer of that file (stdout/stderr go to
 `logs/xmrig.err.log`). The ledger takes share latency, dataset time, allocation and pool connect errors from it, and `/logs`
 shows it. Pool-fail bullets quote the latest `connect error` / `DNS error` line when the log has one. `s` will not start a
