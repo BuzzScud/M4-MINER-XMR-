@@ -19,6 +19,14 @@ xmrig's own API.
 Events: exact times from this Mac's xmrig log (pool errors, backup pool, rejected shares,
 pause / resume, starts) plus logs/events.jsonl, which minerctl writes at every start and stop
 with who asked. The main Mac keeps every Mac's events in logs/fleet-events.jsonl.
+
+The hub (main Mac): every stop leaves a report in that Mac's logs/reports.jsonl; the main Mac's
+keeper collects them every 20 s (/v1/reports) into logs/fleet-reports.jsonl, even with its window
+closed, and serves them at http://127.0.0.1:18089/hub (this Mac only); `/hub` opens it. A copy
+with the data inside is rewritten at ~/Desktop/XMR Hub.html when a new report comes in.
+
+The fleet token: fleet.token.local, never in git. The main Mac makes it (`minerctl token new`) and
+hands it to each other Mac as a signed `token` command, over the token that Mac still answers to.
 """
 from __future__ import annotations
 
@@ -46,7 +54,8 @@ import fleet  # bin/fleet.py: token, worker name, HTTP helpers, the fleet rows
 PORT = 18089
 NS = "xmr-miner-control"   # ssh-keygen signature namespace: a signature for anything else never verifies
 SIGNER = "main"
-CMDS = ("start", "stop", "restart", "hours")
+CMDS = ("start", "stop", "restart", "hours", "token")
+HAS = ["reports", "token"]  # what this helper serves besides commands (the main Mac checks before using it)
 RUN_CMDS = ("start", "stop", "restart")   # the ones that need the window (start) or a running miner (stop)
 MANUAL = ("window", "cli", "remote")      # a stop with one of these reasons holds the hours until their next start
 SCHED_EVERY = 10.0         # s between schedule / watchdog checks
@@ -60,11 +69,14 @@ WINDOW_PICKUP = 20.0       # s for an open window to take a command before the h
 WINDOW_DONE = 60.0         # s for the window to finish it (start ≤ 12 s, stop ≤ 15 s)
 LOG_TAIL = 3_000_000       # bytes of xmrig.log read for events: about 5 days of mining
 ERR_GAP = 90.0             # s: pool errors closer than this are one outage (xmrig retries every 5 s)
+HUB_EVERY = 20.0           # s between the main Mac's collections of every Mac's reports
+HUB_FILE = "XMR Hub.html"  # the Desktop copy (the data is inside it, so it opens with nothing running)
 
 
 def set_root(root: str) -> None:
     """Every path below, for this folder (the self-test points it at a scratch copy)."""
     global ROOT, LOGS, PUB, CTL, XMRIG_LOG, EVENTS, FLEET_EVENTS, PIDFILE, UI_PID, INBOX, SEEN, ALLOWED, HELPER_LOG
+    global REPORTS, FLEET_REPORTS
     ROOT = root
     LOGS = os.path.join(root, "logs")
     PUB = os.path.join(root, "control.pub")
@@ -78,10 +90,14 @@ def set_root(root: str) -> None:
     SEEN = os.path.join(LOGS, "control-seen.json")
     ALLOWED = os.path.join(LOGS, "control.allowed_signers")
     HELPER_LOG = os.path.join(LOGS, "control.log")
+    REPORTS = os.path.join(LOGS, "reports.jsonl")               # this Mac: every stop's report (write-session-summary.py)
+    FLEET_REPORTS = os.path.join(LOGS, "fleet-reports.jsonl")   # main Mac: every Mac's reports, for the hub
 
 
 set_root(fleet.ROOT)
 KEY = os.environ.get("MINER_CONTROL_KEY") or os.path.expanduser("~/Library/Application Support/XMR Miner/control.key")
+DESKTOP = os.environ.get("MINER_DESKTOP") or os.path.expanduser("~/Desktop")
+HUB_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hub.html")
 LAUNCH_AGENTS = os.environ.get("MINER_LAUNCH_AGENTS") or os.path.expanduser("~/Library/LaunchAgents")
 
 
@@ -321,6 +337,8 @@ def check_cmd(msg: dict, me: str, seen: dict, now: float) -> str:
         return "already done (a repeat)"
     if msg.get("cmd") == "hours" and not hours_ok(str(msg.get("arg") or "")):
         return f"not valid hours: {msg.get('arg')!r} (22:00-08:30, always, off)"
+    if msg.get("cmd") == "token" and not fleet.token_ok(str(msg.get("arg") or "")):
+        return "not a valid token"  # never echo it: refusals land in the event log
     return ""
 
 
@@ -807,6 +825,12 @@ def describe(e: dict, now: Optional[float] = None) -> tuple[str, str, str]:
         return "info", ("Opens XMR Miner at login" if why == "on" else "No longer opens XMR Miner at login"), ""
     if k == "watchdog":
         return "bad", "Watchdog gave up", f"{why}; press s to mine again"
+    if k == "token":
+        if why == "received":
+            return "info", f"Got the new fleet token from {by or 'the main Mac'}", ""
+        if why == "sent":
+            return "info", f"Handed the new fleet token to {by}", ""
+        return "info", "Made a new fleet token", "the other Macs get it from this Mac when XMR Miner is open there"
     return "info", str(k), ""
 
 
@@ -894,6 +918,7 @@ class Helper:
         self.version = code_version()
         self.pickup = WINDOW_PICKUP
         self.httpd: Optional[ThreadingHTTPServer] = None
+        self.hub: Optional["Hub"] = None  # the main Mac's: every Mac's reports, served on /hub
 
     def hello(self) -> dict:
         win, run = self.is_window(), self.is_running()
@@ -901,7 +926,7 @@ class Helper:
         can = (["start", "stop", "restart"] if win else (["stop"] if run else [])) + ["hours"]
         return {"v": 1, "worker": self.me, "window": win, "xmrig": run, "version": self.version, "can": can,
                 "key": fingerprint(pub_line()), "hours": hours, "sched": schedule_label(hours, own_tail(), run),
-                "login": login_item_on()}
+                "login": login_item_on(), "has": HAS}
 
     def act(self, cmd: str, why: str) -> dict:
         """The keeper's own start / stop (hours, watchdog): through the window when one is open."""
@@ -957,6 +982,8 @@ class Helper:
         cmd, frm = msg["cmd"], msg.get("from") or ""
         if cmd == "hours":
             return self.set_hours(str(msg.get("arg") or ""), frm)
+        if cmd == "token":
+            return self.take_token(str(msg.get("arg") or ""), frm)
         if self.is_window():
             res = to_window(msg, self.pickup)
             if res is not None:
@@ -982,6 +1009,23 @@ class Helper:
         return {"ok": ok and hours == v, "lines": lines[-3:], "hours": hours,
                 "sched": schedule_label(hours, own_tail(), self.is_running()), "login": login_item_on()}
 
+    def take_token(self, tok: str, frm: str) -> dict:
+        """The main Mac hands over the new fleet token: fleet.token.local (never in git), this helper answers
+        to it from now on, and the job file gets it for xmrig's next start (a running miner is left alone)."""
+        if tok == self.token:
+            return {"ok": True, "lines": ["already has it"]}
+        try:
+            fleet.save_token(tok)
+        except OSError as e:
+            return {"ok": False, "error": f"could not save it: {e}"}
+        self.token = tok
+        try:
+            subprocess.run([CTL, "job"], capture_output=True, text=True, timeout=30)
+        except Exception:
+            pass
+        note("token", why="received", by=frm)
+        return {"ok": True, "lines": ["token saved" + (" · xmrig takes it at its next start" if self.is_running() else "")]}
+
     def direct_stop(self, frm: str) -> dict:
         """The window is closed (or busy): stop xmrig the way t does, without the window."""
         if not self.is_running():
@@ -1003,6 +1047,10 @@ class Helper:
     def events(self, since: float) -> list[dict]:
         return [e for e in local_events(self.me) if max(e["ts"], e.get("last") or 0) >= since][-500:]
 
+    def reports(self, since: float) -> list[dict]:
+        """This Mac's session reports since `since` (the main Mac asks for the ones it lacks)."""
+        return [r for r in read_jsonl(REPORTS, 4_000_000) if r["ts"] >= since and r.get("k") == "report"][-200:]
+
     def server(self) -> ThreadingHTTPServer:
         helper = self
 
@@ -1021,6 +1069,31 @@ class Helper:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def send_page(self, body: bytes, kind: str) -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def hub_get(self, path: str) -> bool:
+                """The hub: on the main Mac only (its keeper listens on 127.0.0.1), and only for a browser that
+                asked for 127.0.0.1 or localhost by name (no other site can reach it through a DNS trick)."""
+                if not path.startswith("/hub"):
+                    return False
+                host = (self.headers.get("Host") or "").lower()
+                if helper.hub is None or host not in (f"127.0.0.1:{helper.port}", f"localhost:{helper.port}"):
+                    self.send(404, {"error": "the hub is on the main Mac: /hub there"})
+                    return True
+                if path in ("/hub", "/hub/"):
+                    self.send_page(hub_html(None).encode(), "text/html; charset=utf-8")
+                elif path == "/hub/data.json":
+                    self.send_page(json.dumps(helper.hub.data()).encode(), "application/json")
+                else:
+                    self.send(404, {"error": "not found"})
+                return True
+
             def authed(self) -> bool:
                 got = self.headers.get("Authorization") or ""
                 if helper.token and hmac.compare_digest(got.encode(), f"Bearer {helper.token}".encode()):
@@ -1030,6 +1103,8 @@ class Helper:
 
             def do_GET(self) -> None:
                 u = urllib.parse.urlsplit(self.path)
+                if self.hub_get(u.path):
+                    return
                 if not self.authed():
                     return
                 if u.path == "/v1/hello":
@@ -1041,6 +1116,13 @@ class Helper:
                     except ValueError:
                         since = 0.0
                     self.send(200, {"worker": helper.me, "events": helper.events(since)})
+                elif u.path == "/v1/reports":
+                    q = urllib.parse.parse_qs(u.query)
+                    try:
+                        since = float((q.get("since") or ["0"])[0])
+                    except ValueError:
+                        since = 0.0
+                    self.send(200, {"worker": helper.me, "reports": helper.reports(since)})
                 else:
                     self.send(404, {"error": "not found"})
 
@@ -1085,6 +1167,7 @@ def serve() -> int:
     """The keeper's life: listen while the window is open, xmrig runs, or this Mac has hours; follow the
     hours and watch for crashes every SCHED_EVERY s; restart itself on a new release. The main Mac and a
     Mac with LAN=off listen on 127.0.0.1 only (no commands from anywhere else)."""
+    main = is_main()
     h = Helper(bind="0.0.0.0" if lan_ok() else "127.0.0.1")
     try:
         httpd = h.server()
@@ -1095,6 +1178,22 @@ def serve() -> int:
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     threading.Thread(target=httpd.serve_forever, name="control", daemon=True).start()
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} keeper {h.version} on {h.bind}:{h.port} for {h.me}", flush=True)
+    if main:
+        h.hub = Hub(h.me)
+
+        def collect() -> None:
+            while True:
+                try:
+                    new = h.hub.tick()  # type: ignore[union-attr]
+                    if new:
+                        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} hub: {len(new)} new report"
+                              + ("s" if len(new) > 1 else "") + " · " + ", ".join(sorted({short(r['worker']) for r in new})), flush=True)
+                except Exception as e:
+                    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} hub collection failed: {e}", flush=True)
+                time.sleep(HUB_EVERY)
+
+        threading.Thread(target=collect, name="hub", daemon=True).start()
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} hub on http://127.0.0.1:{h.port}/hub · collecting every {HUB_EVERY:.0f} s", flush=True)
     try:
         print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} hours {machine_hours()} · {sync_login_item(machine_hours()) or 'no login item'}", flush=True)
     except OSError as e:
@@ -1113,7 +1212,8 @@ def serve() -> int:
                         print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {done}", flush=True)
                 except Exception as e:
                     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} schedule check failed: {e}", flush=True)
-            idle = 0 if (ui_open() or xmrig_running() or machine_hours() != "off") else idle + 1
+            # the main Mac's keeper stays for the hub: it collects the other Macs' reports with the window closed
+            idle = 0 if (main or ui_open() or xmrig_running() or machine_hours() != "off") else idle + 1
             if idle >= 2:
                 print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} no window, no miner, no hours: exiting", flush=True)
                 break
@@ -1391,13 +1491,13 @@ class Feed:
         self.add(local_events(self.me))
         if not self.remote:
             return
-        token = fleet.read_token() if token is None else token
+        toks = fleet.read_tokens() if token is None else fleet.toks(token)
         for r in rows:
             if r.get("here"):
                 continue
             if r.get("ctl") and r.get("host"):
                 since = max(0.0, self.since(r["worker"]) - 900)  # an outage still in progress can grow
-                d, st = fleet.http_json(f"http://{r['host']}:{PORT}/v1/events?since={since:.3f}", token, 4.0)
+                d, st = fleet.http_json(f"http://{r['host']}:{PORT}/v1/events?since={since:.3f}", row_token(r, toks), 4.0)
                 if st == "ok" and isinstance(d, dict):
                     evs = [dict(e, worker=r["worker"]) for e in d.get("events") or [] if isinstance(e, dict) and e.get("k")]
                     for e in evs:
@@ -1452,6 +1552,169 @@ class FeedWatcher:
         self._wake.set()
 
 
+# ---------------------------------------------------------------------- the hub (main Mac)
+def row_token(r: dict, toks: Optional[list] = None) -> str:
+    """The token a Mac's helper answered to last time: its own until the main Mac hands it the new one."""
+    toks = fleet.read_tokens() if toks is None else toks
+    i = int(r.get("tok_i") or 0)
+    return toks[i] if 0 <= i < len(toks) else (toks[0] if toks else "")
+
+
+def report_id(r: dict) -> str:
+    return f"{r.get('worker', '')}|report|{int(round(float(r['ts']) * 1000))}"
+
+
+MAC_KEYS = ("worker", "here", "state", "hs", "hs15", "acc", "rej", "up", "up24", "via", "note", "seen", "lts", "pool_hs", "host")
+
+
+class Hub:
+    """The main Mac's collection of every Mac's session reports (logs/fleet-reports.jsonl), refreshed
+    every HUB_EVERY s by the keeper, window or not. Also: the Macs as the fleet sees them now, the
+    pool balance, and the older sessions from the stop events (before reports existed: no speeds)."""
+
+    def __init__(self, me: Optional[str] = None, path: Optional[str] = None, f: Optional["fleet.Fleet"] = None,
+                 desktop: Optional[str] = None) -> None:
+        self.me = me or fleet.local_worker()
+        self.path = path or FLEET_REPORTS
+        self.fleet = f or fleet.Fleet()
+        self.desktop = DESKTOP if desktop is None else desktop
+        self.port = PORT  # the other Macs' helpers (the self-test points it at its own)
+        self.lock = threading.Lock()
+        self.store: dict[str, dict] = {}
+        self.rows: list[dict] = []
+        self.meta: dict = {}
+        self.at = 0.0
+        self.sent: dict[str, float] = {}  # worker -> when the token was last handed over
+        self._stops: tuple = ((), [])
+        for r in read_jsonl(self.path, 16_000_000):
+            if r.get("k") == "report" and r.get("worker"):
+                self.store[report_id(r)] = r
+
+    def add(self, reps: list[dict]) -> list[dict]:
+        new = []
+        with self.lock:
+            for r in reps:
+                if not isinstance(r, dict) or r.get("k") != "report" or not isinstance(r.get("ts"), (int, float)) or not r.get("worker"):
+                    continue
+                i = report_id(r)
+                if i not in self.store:
+                    self.store[i] = r
+                    new.append(r)
+        if new:
+            append_jsonl(self.path, new)
+        return new
+
+    def since(self, worker: str) -> float:
+        with self.lock:
+            return max((r["ts"] for r in self.store.values() if r["worker"] == worker), default=0.0)
+
+    def tick(self) -> list[dict]:
+        """One collection: this Mac's reports, then each other Mac's helper; the new token to any Mac that
+        still answers to an older one. Returns the reports that are new."""
+        f = self.fleet
+        f.refresh()  # pool every 60 s, LAN now, a subnet scan only when the pool knows a Mac the LAN lacks
+        rows = f.rows()
+        new = self.add([dict(r, worker=r.get("worker") or self.me) for r in read_jsonl(REPORTS, 4_000_000) if r.get("k") == "report"])
+        for r in rows:
+            if r.get("here") or not r.get("ctl") or not r.get("host"):
+                continue
+            has = r["ctl"].get("has") or []
+            tok = f.token_for(r)
+            if "reports" in has:
+                d, st = fleet.http_json(f"http://{r['host']}:{self.port}/v1/reports?since={max(0.0, self.since(r['worker']) - 1):.3f}", tok, 4.0)
+                if st == "ok" and isinstance(d, dict):
+                    new += self.add([dict(x, worker=r["worker"]) for x in d.get("reports") or [] if isinstance(x, dict)])
+            if int(r.get("tok_i") or 0) > 0 and "token" in has and f.token and time.time() - self.sent.get(r["worker"], 0) > 60:
+                self.sent[r["worker"]] = time.time()
+                res = send(r["host"], r["worker"], "token", tok, self.me, port=self.port, timeout=30.0, arg=f.token)
+                if res.get("ok"):
+                    note("token", why="sent", by=r["worker"])
+                    r["tok_i"] = 0  # it answers to the new one now: the hub says so before the next collection
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} token to {short(r['worker'])}: "
+                      + ("handed over" if res.get("ok") else f"not yet · {res.get('error') or 'no answer'}"), flush=True)
+        with self.lock:
+            self.rows, self.meta, self.at = rows, f.meta(rows), time.time()
+        if new:
+            self.write_desktop()
+        return new
+
+    def stop_sessions(self) -> list[dict]:
+        """Sessions from the stop events (fleet-events.jsonl + this Mac's events.jsonl), for the time before
+        reports existed: how long and how many shares, no speeds. Cached until either file changes."""
+        key = (_stamp(FLEET_EVENTS), _stamp(EVENTS))
+        if self._stops[0] == key:
+            return self._stops[1]
+        seen, out = set(), []
+        for e in read_jsonl(FLEET_EVENTS, 8_000_000) + [dict(x, worker=x.get("worker") or self.me) for x in read_jsonl(EVENTS, 2_000_000)]:
+            if e.get("k") != "stop" or e.get("why") in ("restart", "settings") or not e.get("up") or e.get("approx"):
+                continue
+            i = event_id(e)
+            if i in seen:
+                continue
+            seen.add(i)
+            up = int(e.get("up") or 0)
+            out.append({"k": "report", "partial": True, "ts": e["ts"], "worker": e.get("worker") or self.me, "why": e.get("why") or "cli",
+                        "by": e.get("by") or "", "up": up, "started": round(e["ts"] - up, 3), "acc": int(e.get("acc") or 0),
+                        "rej": int(e.get("rej") or 0)})
+        self._stops = (key, out)
+        return out
+
+    def reports(self) -> list[dict]:
+        """Every report, newest first; a stop event stands in only where no report covers that stop."""
+        with self.lock:
+            full = list(self.store.values())
+        near: dict[str, list] = {}
+        for r in full:
+            near.setdefault(r["worker"], []).append(r["ts"])
+        extra = [p for p in self.stop_sessions() if not any(abs(p["ts"] - t) < 120 for t in near.get(p["worker"], []))]
+        out = [dict(r, id=report_id(r), mac=short(r["worker"])) for r in full + extra]
+        return sorted(out, key=lambda r: -r["ts"])[:3000]
+
+    def data(self) -> dict:
+        with self.lock:
+            rows, meta, at = list(self.rows), dict(self.meta), self.at
+        toks = self.fleet.tokens
+        macs = []
+        for r in rows:
+            m = {k: r.get(k) for k in MAC_KEYS}
+            m["mac"] = short(r["worker"])
+            m["window"] = bool((r.get("ctl") or {}).get("window"))
+            if len(toks) > 1 and not r.get("here"):
+                m["token"] = ("new" if not int(r.get("tok_i") or 0) else "old") if r.get("ctl") else None
+            macs.append(m)
+        return {"v": 1, "me": short(self.me), "at": time.time(), "collected": at, "reports": self.reports(), "macs": macs,
+                "balance": meta.get("balance"), "pool_total": meta.get("pool_total"), "mining": meta.get("mining"),
+                "total": meta.get("total"), "rotated": len(toks) > 1}
+
+    def write_desktop(self) -> str:
+        """~/Desktop/XMR Hub.html with the data inside: opens with nothing running (a snapshot)."""
+        if not self.desktop:
+            return ""
+        path = os.path.join(self.desktop, HUB_FILE)
+        try:
+            os.makedirs(self.desktop, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(hub_html(self.data()))
+            os.replace(tmp, path)
+            return path
+        except OSError:
+            return ""
+
+
+def hub_html(data: Optional[dict]) -> str:
+    """bin/hub.html; with data, a snapshot that carries it (the Desktop copy), else the live page."""
+    try:
+        with open(HUB_PAGE, encoding="utf-8") as fh:
+            page = fh.read()
+    except OSError:
+        return "<!doctype html><meta charset=utf-8><title>XMR Miner hub</title><p>bin/hub.html is missing: minerctl update."
+    if data is None:
+        return page
+    blob = json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    return page.replace("/*HUB_DATA*/null", blob, 1)
+
+
 # ---------------------------------------------------------------------- CLI
 def print_events(evs: list[dict], color: bool) -> None:
     c = (lambda n: f"\033[38;5;{n}m") if color else (lambda n: "")
@@ -1492,7 +1755,7 @@ def cli_send(args: list[str]) -> int:
             print(f"  {short(w)} (this Mac): " + (" · ".join(out[:2]) or "done"))
             continue
         print(f"  {short(w)}: {DOING[cmd].lower()}…", flush=True)
-        res = send(r["host"], w, cmd, f.token, arg=arg)
+        res = send(r["host"], w, cmd, f.token_for(r), arg=arg)
         if res.get("ok") and cmd == "hours":
             print(f"  {short(w)}: hours {res.get('hours')} · {res.get('sched') or '—'}" + (" · opens at login" if res.get("login") else ""))
         elif res.get("ok"):
@@ -1516,12 +1779,89 @@ def cli_events(args: list[str]) -> int:
     else:
         f = fleet.Fleet()
         f.refresh(allow_scan=False)
-        feed.refresh(f.rows(), f.token)
+        feed.refresh(f.rows(), f.tokens)
     evs = feed.latest(n, include_hidden="--all" in args)
     if not evs:
         print("No events yet.")
         return 0
     print_events(evs, sys.stdout.isatty())
+    return 0
+
+
+def hub_url() -> str:
+    return f"http://127.0.0.1:{PORT}/hub"
+
+
+def cli_hub(args: list[str]) -> int:
+    """Main Mac: make sure the keeper runs (it serves and collects), refresh the Desktop copy, open the page."""
+    if not is_main():
+        print("The hub is on the main Mac: open it there with /hub (or ./bin/minerctl.sh hub).")
+        return 1
+    state = ensure()
+    d, st = None, ""
+    for _ in range(50):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(hub_url() + "/data.json"), timeout=3) as r:
+                d, st = json.load(r), "ok"
+            break
+        except Exception as e:
+            st = fleet.classify(e)
+            time.sleep(0.2)
+    if not isinstance(d, dict):
+        print(f"The keeper did not answer on {hub_url()} ({st}); see logs/control.log.")
+        return 1
+    path = ""
+    if "--no-file" not in args:
+        path = os.path.join(DESKTOP, HUB_FILE)
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(hub_html(d))
+            os.replace(tmp, path)
+        except OSError:
+            path = ""
+    n = len(d.get("reports") or [])
+    macs = len(d.get("macs") or [])
+    print(f"Hub: {hub_url()} · {n} report{'s' if n != 1 else ''} · {macs} Mac{'s' if macs != 1 else ''}"
+          + (" · keeper started" if state == "started" else ""))
+    if path:
+        print(f"Desktop copy: {path}")
+    if "--no-open" not in args:
+        subprocess.run(["open", hub_url()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return 0
+
+
+def cli_token(args: list[str]) -> int:
+    """token: which Macs answer to this Mac's token · token new (main Mac): make one, keep the old ones."""
+    toks = fleet.read_tokens()
+    if args[:1] == ["new"]:
+        if not is_main():
+            print("Only the main Mac makes the token; it hands it to the other Macs itself.")
+            return 1
+        tok = secrets.token_urlsafe(32)
+        fleet.save_token(tok)
+        subprocess.run([CTL, "job"], capture_output=True, text=True, timeout=30)
+        note("token", why="new")
+        print("New fleet token saved in fleet.token.local (never in git).")
+        print("The other Macs get it from this Mac by themselves while XMR Miner is open there (after the release).")
+        if xmrig_running():
+            print("This Mac's miner still answers to the old one until you press t, then s.")
+        return 0
+    local = bool(fleet.read_lines(fleet.TOKEN_LOCAL))
+    print(f"This Mac: {'fleet.token.local (not in git)' if local else 'fleet.token (the old one, public in the repo)' if toks else 'no token'}"
+          + (f" · {len(toks) - 1} older one{'s' if len(toks) != 2 else ''} kept to reach Macs that lack it" if len(toks) > 1 else ""))
+    if len(toks) < 2:
+        return 0
+    f = fleet.Fleet()
+    f.refresh(allow_scan=False)
+    for r in f.rows():
+        if r.get("here"):
+            continue
+        if r.get("ctl"):
+            print(f"  {short(r['worker']):<16} " + ("has the new token" if not r.get("tok_i") else
+                  "still on an older one: gets the new one while XMR Miner is open there"))
+        else:
+            print(f"  {short(r['worker']):<16} not reachable now ({ctl_why(r)})")
     return 0
 
 
@@ -1534,6 +1874,8 @@ def main(argv: Optional[list] = None) -> int:
               "control.py send hours <mac|all> 22:00-08:30|always|off\n"
               "control.py hours-changed              minerctl after HOURS changed: note, login item, keeper\n"
               "control.py events [-n N] [--here] [--all]      timed event log\n"
+              "control.py hub [--no-open] [--no-file]        main Mac: every Mac's reports in the browser\n"
+              "control.py token [new]                 the fleet token (new: main Mac, hands it over)\n"
               "control.py keygen                     main Mac: make the signing key + control.pub\n"
               "control.py note start|stop [--why W] [--by NAME] [--api-stdin]\n"
               "control.py --self-test")
@@ -1552,6 +1894,10 @@ def main(argv: Optional[list] = None) -> int:
         return cli_send(a[1:])
     if a[0] == "events":
         return cli_events(a[1:])
+    if a[0] == "hub":
+        return cli_hub(a[1:])
+    if a[0] == "token":
+        return cli_token(a[1:])
     if a[0] == "keygen":
         if not is_main():
             print("Only the main Mac holds the control key (./bin/minerctl.sh role).")
@@ -1863,6 +2209,106 @@ def self_test() -> int:
               and "config remote minerv3-m4-16gb" in calls_now)
         res = send("127.0.0.1", "minerv3-m2-8gb", "hours", "tok", "minerv3-m4-16gb", port=h.port, arg="25:00-01:00")
         check("helper: bad hours refused before anything runs", not res.get("ok") and "not valid hours" in res.get("error", ""))
+        # reports + the new token: the main Mac's hub collects from a helper and hands over the token
+        old_tok_files = (fleet.TOKEN_FILE, fleet.TOKEN_LOCAL)
+        fleet.TOKEN_FILE, fleet.TOKEN_LOCAL = os.path.join(td, "fleet.token"), os.path.join(td, "fleet.token.local")
+        with open(fleet.TOKEN_FILE, "w") as fh:
+            fh.write("# the tracked one\ntok\n")  # what every follower has today, from git
+        try:
+            d, st = fleet.http_json(base + "/v1/hello", "tok", 2)
+            check("helper: hello says it serves reports and takes the token", st == "ok" and d.get("has") == ["reports", "token"])
+            t_rep = time.time() - 3600
+            rep1 = {"ts": t_rep, "k": "report", "worker": "minerv3-m2-8gb", "why": "window", "up": 3000, "started": t_rep - 3000,
+                    "hs15": 3200.0, "acc": 400, "rej": 1, "text": "XMR miner session\n</script><b>x</b>\n"}
+            rep2 = dict(rep1, ts=t_rep + 1800, why="schedule", up=1200, started=t_rep + 600, acc=150, rej=0, text="t2")
+            append_jsonl(REPORTS, [rep1, rep2])
+            d, st = fleet.http_json(base + f"/v1/reports?since={t_rep + 1:.3f}", "tok", 3)
+            check("helper: /v1/reports since a time", st == "ok" and [r["why"] for r in d["reports"]] == ["schedule"])
+            d, st = fleet.http_json(base + "/v1/reports?since=0", "", 3)
+            check("helper: /v1/reports wants the token", st == "auth")
+            new_tok = "N" * 43
+            m = make_cmd("token", "minerv3-m2-8gb", "minerv3-m4-16gb", "bad token")
+            c_bad, r_bad = post(json.dumps({"msg": m, "sig": sign(m.encode())}).encode())
+            check("helper: a bad token is refused and never echoed", c_bad == 409 and r_bad["error"] == "not a valid token"
+                  and not any("bad token" in json.dumps(e) for e in read_jsonl(EVENTS)))
+
+            class FakeFleet:
+                def __init__(self, rows: list, tokens: list) -> None:
+                    self._rows, self.tokens, self.token = rows, tokens, tokens[0]
+
+                def refresh(self, allow_scan: bool = True) -> None:
+                    pass
+
+                def rows(self) -> list:
+                    return [dict(r) for r in self._rows]
+
+                def meta(self, rows: list) -> dict:
+                    return {"balance": {"due": 0.00513, "paid": 0.0, "threshold": 0.3}, "pool_total": 3224.0, "mining": 1, "total": 3224.0}
+
+                def token_for(self, r: dict) -> str:
+                    i = int(r.get("tok_i") or 0)
+                    return self.tokens[i] if i < len(self.tokens) else self.token
+
+            ff = FakeFleet([{"worker": "minerv3-m4-16gb", "here": True, "state": "stopped"},
+                            {"worker": "minerv3-m2-8gb", "here": False, "state": "mining", "host": "127.0.0.1", "hs": 3224.0,
+                             "tok_i": 1, "ctl": {"has": ["reports", "token"], "window": True}}], [new_tok, "tok"])
+            with open(FLEET_EVENTS, "w") as fh:  # an older stop (before reports) and one a report already covers
+                fh.write(json.dumps({"ts": t_rep - 86400, "k": "stop", "worker": "minerv3-m2-8gb", "why": "remote",
+                                     "by": "minerv3-m4-16gb", "up": 7200, "acc": 900, "rej": 2}) + "\n")
+                fh.write(json.dumps({"ts": t_rep + 2, "k": "stop", "worker": "minerv3-m2-8gb", "why": "window", "up": 3000, "acc": 400}) + "\n")
+                fh.write(json.dumps({"ts": t_rep - 50000, "k": "stop", "worker": "minerv3-m2-8gb", "why": "restart", "up": 60}) + "\n")
+            hub = Hub(me="minerv3-m4-16gb", path=os.path.join(td, "logs", "fleet-reports.jsonl"), f=ff, desktop=td)  # type: ignore[arg-type]
+            hub.port = h.port
+            new = hub.tick()
+            check("hub: collects that Mac's reports once (its own file and the helper give the same ones)",
+                  len(new) == 2 and len(hub.store) == 2 and len(read_jsonl(hub.path)) == 2)
+            check("hub: hands the new token over the old one", h.token == new_tok and hub.data()["macs"][1]["token"] == "new" and fleet.read_tokens()[:2] == [new_tok, "tok"]
+                  and any(e["k"] == "token" and e.get("why") == "received" for e in read_jsonl(EVENTS))
+                  and any(e["k"] == "token" and e.get("why") == "sent" and e.get("by") == "minerv3-m2-8gb" for e in read_jsonl(EVENTS)))
+            d_old, st_old = fleet.http_json(base + "/v1/hello", "tok", 2)
+            d_new, st_new = fleet.http_json(base + "/v1/hello", new_tok, 2)
+            check("helper: after the hand-over only the new token opens it", st_old == "auth" and st_new == "ok")
+            n_sent = sum(1 for e in read_jsonl(EVENTS) if e["k"] == "token" and e.get("why") == "sent")
+            check("hub: a second collection sends nothing twice", hub.tick() == [] and len(hub.store) == 2
+                  and sum(1 for e in read_jsonl(EVENTS) if e["k"] == "token" and e.get("why") == "sent") == n_sent)
+            check("hub: reloads what it collected", len(Hub(me="minerv3-m4-16gb", path=hub.path, f=ff, desktop="").store) == 2)  # type: ignore[arg-type]
+            reps = hub.reports()
+            check("hub: newest first, an older stop event stands in, a covered one and a restart do not",
+                  [r["why"] for r in reps] == ["schedule", "window", "remote"] and reps[2]["partial"] and reps[2]["up"] == 7200
+                  and not reps[0].get("partial") and reps[0]["mac"] == "m2-8gb")
+            dd = hub.data()
+            check("hub: data carries the Macs, the balance and who has the new token", dd["macs"][1]["mac"] == "m2-8gb"
+                  and dd["macs"][1]["token"] == "old" and dd["balance"]["threshold"] == 0.3 and dd["rotated"]
+                  and "ctl" not in dd["macs"][1] and "tok_i" not in dd["macs"][1])
+            h.hub = hub
+
+            def get(path: str, host: Optional[str] = None) -> tuple:
+                hdr = {"Host": host} if host else {}
+                try:
+                    with urllib.request.urlopen(urllib.request.Request(base + path, headers=hdr), timeout=5) as r:
+                        return r.status, r.read().decode()
+                except urllib.error.HTTPError as e:
+                    return e.code, ""
+
+            c1, page = get("/hub")
+            c2, body = get("/hub/data.json")
+            c3, _ = get("/hub", f"evil.example:{h.port}")
+            c4, _ = get("/hub/data.json", f"localhost:{h.port}")
+            check("hub page: served on 127.0.0.1 / localhost without a token, refused for any other host name",
+                  c1 == 200 and "<title>XMR Miner hub</title>" in page and "/*HUB_DATA*/null" in page
+                  and c2 == 200 and json.loads(body)["reports"][0]["why"] == "schedule" and c3 == 404 and c4 == 200)
+            check("hub data never carries a token", new_tok not in body and '"tok"' not in body)
+            path = hub.write_desktop()
+            snap = open(path, encoding="utf-8").read() if path else ""
+            check("Desktop copy: the data inside, a report's </script> cannot end the page",
+                  path.endswith("XMR Hub.html") and "/*HUB_DATA*/null" not in snap and '"why":"schedule"' in snap
+                  and "<\\/script><b>x<\\/b>" in snap and snap.count("</script>") == 1)
+            h.hub = None
+            c5, _ = get("/hub")
+            check("hub page: a follower's helper has none", c5 == 404)
+            os.remove(FLEET_EVENTS)
+        finally:
+            fleet.TOKEN_FILE, fleet.TOKEN_LOCAL = old_tok_files
         httpd.shutdown()
         httpd.server_close()
 

@@ -282,11 +282,13 @@ read_wallet() {
   return 0
 }
 
-# Sets FLEET_TOKEN from fleet.token (first line that is not a comment), or "" when absent.
-# Only URL-safe characters: the token goes into the plist and an HTTP header unescaped.
+# Sets FLEET_TOKEN from fleet.token.local (never in git: the main Mac hands it to the others) or else
+# the tracked fleet.token (the old one, public since the repo is): first line that is not a comment,
+# or "" when both are absent. Only URL-safe characters: it goes into the plist and an HTTP header unescaped.
 read_fleet_token() {
-  local f="$1/fleet.token"
+  local f="$1/fleet.token.local"
   FLEET_TOKEN=""
+  [[ -f "$f" ]] && grep -v '^#' "$f" | grep -q '[^[:space:]]' || f="$1/fleet.token"
   [[ -f "$f" ]] || return 0
   FLEET_TOKEN=$(grep -v '^#' "$f" | grep -v '^[[:space:]]*$' | head -1 | tr -d '[:space:]')
   if [[ -n "$FLEET_TOKEN" && "$FLEET_TOKEN" == *[^A-Za-z0-9._~+/=-]* ]]; then

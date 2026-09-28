@@ -111,6 +111,7 @@ COMMANDS = (
     Cmd("/stop", "Stop here, or: /stop m2, all", "stop", "fleet"),
     Cmd("/events", "Pool errors, rejects, stops", "events", "fleet"),
     Cmd("/hours", "Mining hours: /hours m2 22:00-08:30", "hours", "fleet"),
+    Cmd("/hub", "Every Mac's reports, in the browser", "hub", "fleet"),
     Cmd("/help", "List commands", "help", "ui"),
     Cmd("/quit", "Quit; the miner keeps running", "quit", "ui"),
 )
@@ -2497,7 +2498,7 @@ class App:
         host, w = r.get("host") or "", r["worker"]
 
         def run() -> None:
-            self.remote_q.put((ev, control.send(host, w, cmd, FLEET_TOKEN, arg=arg)))  # type: ignore[attr-defined]
+            self.remote_q.put((ev, control.send(host, w, cmd, control.row_token(r), arg=arg)))  # type: ignore[attr-defined]
 
         threading.Thread(target=run, name="send", daemon=True).start()
 
@@ -2573,6 +2574,20 @@ class App:
             else:
                 self.feed_rows[e["id"]] = self.add("fevent", ts=e["ts"], ev=e)
 
+    def do_hub(self) -> None:
+        """/hub: every Mac's session reports in the browser, served by this Mac's keeper (main Mac only)."""
+        self.add("user", text="/hub")
+        self.mode = "home"
+        if not self.main:
+            self.say("The hub is on the main Mac: /hub there. This Mac's reports go to it by themselves.")
+            return
+        if not self.dump:
+            subprocess.Popen([sys.executable, os.path.join(ROOT, "bin", "control.py"), "hub"], cwd=ROOT,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        self.say("Opening the hub in your browser · http://127.0.0.1:18089/hub",
+                 "every Mac's reports; a copy with the data is on the Desktop as XMR Hub.html")
+
     def do_open(self) -> None:
         subprocess.Popen(["open", ROOT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.add("user", text="/open")
@@ -2636,6 +2651,8 @@ class App:
             self.open_overlay("Logs", "err")
         elif action == "open":
             self.do_open()
+        elif action == "hub":
+            self.do_hub()
         elif action == "flex":
             self.do_flex()
         elif action == "pause":
@@ -3287,7 +3304,7 @@ def self_test() -> int:
     check("palette fleet status (compact beside the rail)", " 2 /fleet" in pal and "3/3 · 8,103 H/s" in pal)
     wide = dump_frame("slash", 147, 58, strip=True)  # the launcher size: a 109-col pane beside the rail
     check("palette fleet status (wide)", "3 of 3 mining · 8,103 H/s" in wide)
-    check("palette hints row", "1 of 15" in pal and "1–9 run" in pal)
+    check("palette hints row", "1 of 16" in pal and "1–9 run" in pal)
     pal2 = dump_frame("palette", strip=True)
     pal_rows = [ln for ln in pal2.split("\n") if "/usage" in ln or ln.strip() in ("miner", "actions", "ui", "recent")]
     check("palette filter is flat + selected", not any(ln.strip() in ("miner", "actions", "ui") for ln in pal2.split("\n")) and "▎1 /usage" in pal2 and "1 of 1" in pal2)
@@ -3505,7 +3522,7 @@ def self_test() -> int:
     a.add("backup", pool="de.moneroocean.stream:20016")
     a.add("fevent", ts=time.time() - 3, ev=_demo_events()[2])
     home2 = "\n".join(plain(x) for x in a.compose(a.live()))
-    hhmm = re.compile(r" · \d\d:\d\d:\d\d")
+    hhmm = re.compile(r" · (?:\d\d-\d\d )?\d\d:\d\d:\d\d")  # an earlier day shows its date first
     check("start line has its time", any("• Started xmrig" in ln and hhmm.search(ln) for ln in home2.split("\n")))
     check("reject line: time + reason", "• Share rejected #722 · " in home2 and '└ "Throttled down share submission' in home2)
     check("backup line", "• Switched to the backup pool · " in home2)
@@ -3616,6 +3633,35 @@ def self_test() -> int:
     a.on_key_home("3")
     check("a digit right after / still runs that row", a.mode == "overlay" and a.buf == "")
     check("typed hints for the fleet", typed_hint("/stop m2") == "↵ stop m2 (asks first)" and typed_hint("/start") == "↵ start this Mac · or /start m2, /start all")
+    a = demo_app("home")
+    a.main = True
+    a.buf = "/hub"
+    a.on_key_home("enter")
+    hub_f = "\n".join(plain(x) for x in a.compose(a.live()))
+    check("/hub on the main Mac opens it", "Opening the hub in your browser · http://127.0.0.1:18089/hub" in hub_f and a.mode == "home")
+    a = demo_app("home")
+    a.main = False
+    a.buf = "/hub"
+    a.on_key_home("enter")
+    check("/hub on a follower points at the main Mac", "The hub is on the main Mac" in "\n".join(plain(x) for x in a.compose(a.live())))
+    a = demo_app("home")
+    sent: list = []
+    real_send, real_toks = control.send, fleet.read_tokens
+    control.send = lambda host, w, cmd, tok, arg="": sent.append((host, cmd, tok)) or {"ok": True}  # type: ignore
+    fleet.read_tokens = lambda: ["new-token", "old-token"]  # type: ignore
+    try:
+        a.dump = False
+        a.remote_send("stop", {"worker": "minerv3-m2-8gb", "host": "10.0.0.2", "tok_i": 1})
+        a.remote_send("stop", {"worker": "minerv3-i7-6700hq-16gb", "host": "10.0.0.3", "tok_i": 0})
+        for _ in range(50):
+            if len(sent) == 2:
+                break
+            time.sleep(0.02)
+    finally:
+        control.send, fleet.read_tokens = real_send, real_toks
+        a.dump = True
+    check("remote commands use the token each Mac answers to (old until it gets the new one)",
+          sorted(sent) == [("10.0.0.2", "stop", "old-token"), ("10.0.0.3", "stop", "new-token")])
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
     return 0 if fails == 0 else 1
 

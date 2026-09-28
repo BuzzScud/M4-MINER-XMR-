@@ -42,6 +42,11 @@ logs/control-inbox/
 logs/ui.pid
 logs/*.sig
 logs/*.tmp
+# the hub (bin/control.py): each Mac's reports, and every Mac's on the main Mac
+logs/reports.jsonl
+logs/fleet-reports.jsonl
+# the fleet token since the repo is public: this Mac's, never in git (the main Mac hands it over)
+fleet.token.local
 # the signing key lives outside this folder (~/Library/Application Support/XMR Miner); never commit one
 control.key
 control.key.pub

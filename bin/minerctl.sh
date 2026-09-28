@@ -715,6 +715,8 @@ Usage: ./bin/minerctl.sh <command>
   config set HOURS=22:00-08:30          this Mac's mining hours (off = only when you press s)
   remote setup       main Mac: make the signing key (then release, so the others get control.pub)
   events [-n N] [--here] [--all]        timed log: pool errors, rejected shares, starts, stops
+  hub                main Mac: every Mac's session reports in the browser (also ~/Desktop/XMR Hub.html)
+  token [new]        the fleet token: which Macs have the new one · new: make one (main Mac hands it over)
   release ["msg"]    main Mac: commit everything here, push, release it to the others (--yes: no prompt)
   update             follower: become the latest release now (opening XMR Miner does it too); miner left stopped
                      main: fast-forward main from GitHub, reinstall, restart if it was running
@@ -740,6 +742,18 @@ EOF
   events)
     shift
     exec python3 "$ROOT/bin/control.py" events "$@"
+    ;;
+
+  hub)
+    # Main Mac: every Mac's reports in the browser (the keeper serves it on 127.0.0.1 only).
+    shift
+    exec python3 "$ROOT/bin/control.py" hub "$@"
+    ;;
+
+  token)
+    # The fleet token (never in git): token (status) | token new (main Mac: make one; it hands it over).
+    shift
+    exec python3 "$ROOT/bin/control.py" token "$@"
     ;;
 
   update)
@@ -906,12 +920,14 @@ except Exception:
     if ! is_up; then echo "Not running."; exit 0; fi
     reason="${1:-stop}"
     J=$(api_curl "$API" --max-time 2 || true)
-    if [[ "${MINER_WHY:-}" == schedule ]]; then
-      :  # the hours end every day: no Desktop file for that; the event log has it
-    elif [[ -n $J ]]; then
-      print -r -- "$J" | python3 "$ROOT/bin/write-session-summary.py" --reason "$reason" --api-stdin || true
+    # Every stop keeps its report in logs/reports.jsonl for the main Mac's hub. The hours end every
+    # day, so that one gets no Desktop file (the hub and the event log have it).
+    sumargs=(--reason "$reason" --why "${MINER_WHY:-cli}" --by "${MINER_BY:-}")
+    [[ "${MINER_WHY:-}" == schedule ]] && sumargs+=(--no-desktop)
+    if [[ -n $J ]]; then
+      print -r -- "$J" | python3 "$ROOT/bin/write-session-summary.py" "${sumargs[@]}" --api-stdin || true
     else
-      python3 "$ROOT/bin/write-session-summary.py" --reason "$reason" || true
+      python3 "$ROOT/bin/write-session-summary.py" "${sumargs[@]}" || true
     fi
     kill_all
     if is_up; then

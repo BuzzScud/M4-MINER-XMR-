@@ -11,12 +11,13 @@ Home: wherever this folder lives (this M4: `/Users/christiantavarez/Desktop/PROJ
 ```
 bin/                 xmrig (universal arm64 + x86_64, 6.26.0), machine.sh (chip/threads/mode/worker + the job file),
                      miner-ui.py (the Terminal UI), minerctl.sh (start/stop/status/job/fleet), fleet.py (every Mac
-                     at once: LAN API + pool), control.py (start/stop the other Macs + the timed event log),
-                     write-session-summary.py,
+                     at once: LAN API + pool), control.py (start/stop the other Macs, the timed event log, the hub),
+                     hub.html (the hub page), write-session-summary.py (the report at every stop),
                      xmr_bench_sweep.sh, the dock launcher's AppleScript and icon
 XMR Miner.app/       dock launcher: opens Terminal at 147×58 with the UI; never starts mining by itself
 logs/                xmrig.log / xmrig.err.log (from --log-file), last-session.json, the pid file,
-                     events.jsonl (every start / stop, who asked), fleet-events.jsonl (main Mac)   (local only)
+                     events.jsonl (every start / stop, who asked), fleet-events.jsonl (main Mac),
+                     reports.jsonl (every stop's report), fleet-reports.jsonl (main Mac: every Mac's)   (local only)
 docs/setup/          Setup Instructions (html)
 docs/randomx/        how RandomX is made, the mining audit, the M4 tune plan, Two Proofs of Work
 docs/designs/        the interactive TUI mockup pages the screen was chosen from
@@ -26,7 +27,8 @@ install.sh           signs xmrig, writes the job file for this Mac, rebuilds the
 wallet.local         the payout address (public receive address only; tracked in git so every Mac mines to it)
 com.minerv3.xmrig.plist(.example)   the job file, rendered per Mac at install and every start (gitignored)
 machine.local        optional tuning overrides for this Mac: THREADS= / MODE= / WORKER= / LAN=off (gitignored)
-fleet.token          the API access token every Mac shares (tracked, like wallet.local; see Fleet)
+fleet.token.local    this Mac's fleet token, never in git: the main Mac makes it and hands it to the others (see Fleet)
+fleet.token          the OLD token (tracked; public since the repo is): only a bridge to Macs that lack the new one
 fleet.local          optional extra hosts for the fleet view, one host[:port] per line (gitignored)
 control.pub          the main Mac's public key: the other Macs take start/stop only when it signed them (tracked)
 vendor/              local xmrig source checkout (gitignored); XMR-Miner-Portable.zip, bin/xmrig.* extras (gitignored)
@@ -75,6 +77,8 @@ cd "/Users/christiantavarez/Desktop/PROJECTS/XMR MINER"
 ./bin/minerctl.sh fleet scan   # look for miners on this subnet now
 ./bin/minerctl.sh remote stop m2       # main Mac: stop / start / restart another Mac (m2, i7, all)
 ./bin/minerctl.sh events       # timed log: pool errors, rejected shares, starts and stops (-n 100, --here)
+./bin/minerctl.sh hub          # main Mac: every Mac's session reports in the browser (see Hub)
+./bin/minerctl.sh token        # the fleet token: which Macs have the new one; token new = make one (main Mac)
 ./bin/minerctl.sh release "what changed"   # main Mac: commit, push, release to the other Macs (see Releases)
 ./bin/minerctl.sh update   # follower: become the latest release now (opening the app does it); miner left stopped
 ./bin/minerctl.sh role     # main or follower (see Releases)
@@ -162,6 +166,7 @@ q / ⌃C       quit UI (does not stop a running miner)
              ↑↓ picks a Mac, s / t / r start, stop, restart it (stop and restart ask y / n)
 /start m2    start another Mac (main Mac only); /stop m2, /restart m2, /stop all; bare /start = this Mac
 /events      timed log of every Mac: pool errors, backup pool, rejected shares, starts, stops, pauses
+/hub         main Mac: every Mac's session reports in the browser (Reports · Macs · Totals)
 /config      card: threads, mode, yield, pool, worker, flex, overrides; + − a x o m y e change them
 + / −        one thread more / fewer (restarts xmrig if it is mining)
 /perf N      threads: N, up, down, max, eco, auto, 75%      /set KEY=value …   /unset KEY …
@@ -209,9 +214,12 @@ answer: asleep, off, away), `no token` (its `fleet.token` differs), `idle` (the 
 - Another network: put the Macs on Tailscale (or ZeroTier) and list their names in `fleet.local`, one `host[:port]` per
   line. Do not port-forward 18088 to the internet.
 - Keep one Mac off the LAN: `LAN=off` in its `machine.local` (API back on 127.0.0.1; the pool still shows it).
-- `fleet.token` is tracked in git on purpose (private repo) so every Mac gets it with a release. It only unlocks
-  read-only stats. To rotate it: replace the line, `./bin/minerctl.sh release`, then reopen XMR Miner on every Mac
-  and press **s**. Rotate it if the repo ever goes public.
+- The token lives in `fleet.token.local`, which is **never in git** (the repo is public). The main Mac makes it
+  (`./bin/minerctl.sh token new`) and hands it to each other Mac by itself: a signed `token` command, sent over the
+  token that Mac still answers to, while XMR Miner is open there. That Mac answers only to the new one from then on
+  (its running xmrig takes it at its next start). The old token stays in the tracked `fleet.token` only as that
+  bridge; it unlocks nothing on a Mac that has the new one. `./bin/minerctl.sh token` says which Macs have it.
+  To rotate again: `token new` on the main Mac; the older ones are kept so every Mac can still be reached.
 - Because it is xmrig's own API, XMRig dashboards and monitors that take a URL plus an access token work as well.
 
 ## Start and stop the other Macs (from the main Mac)
@@ -273,6 +281,25 @@ In the UI: `/fleet`, pick a Mac, `h`, type the hours; `h` on `/config` for this 
 The side panel's fleet section shows each Mac's **uptime over the last 24 hours** (from the pool's hashrate history,
 refreshed every 5 minutes, points 6 to 18 minutes apart, so a stop of a minute or two does not show), its share
 count, and how long an offline Mac has been gone.
+
+## Hub (every Mac's reports, on the main Mac)
+
+Every stop leaves a report: the Desktop txt on that Mac, as always, and the same report as data in its
+`logs/reports.jsonl`. That covers a stop in the window, from Terminal, from the main Mac, for an update, and the end
+of mining hours (that one has no Desktop file, the hub has it). Restarts and settings changes are not stops.
+
+The main Mac's keeper collects every Mac's reports every 20 s into `logs/fleet-reports.jsonl`, **also with its
+window closed**: once it is up (XMR Miner opened, `s`, or `/hub`), it stays until the Mac logs out or restarts.
+A Mac that stopped while the main Mac was off is picked up the next time both are on with XMR Miner open there.
+
+- `/hub` in the UI (or `./bin/minerctl.sh hub`) opens **http://127.0.0.1:18089/hub** in the browser: **Reports**
+  (every session by day, per Mac, ↵ on a row shows the full report), **Macs** (each Mac now, its last report, 7
+  days, and whether it has the new fleet token), **Totals** (hours mined, shares, average speed, pool balance, per
+  Mac; today, 7 days, 30 days, all). The page updates itself every 10 s. It listens on this Mac only, needs no
+  token, and answers only to 127.0.0.1 / localhost.
+- `~/Desktop/XMR Hub.html` is a copy with the data inside, rewritten when a new report comes in, so it opens with
+  nothing running (a snapshot: it says when it was made).
+- Sessions from before reports existed come from the stop events (length and shares, no speeds: `event log`).
 
 ## Event log (times for everything)
 

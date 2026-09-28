@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XMR Miner hub</title>
+<style>
+:root {
+  --page: #f9f9f7; --surface: #fcfcfb; --panel: #f3f3f0; --line: #e3e2dc;
+  --ink: #0b0b0b; --ink2: #52514e; --ink3: #8a887f; --accent: #2a78d6; --accent-ink: #fff;
+  --good: #1e8e3e; --bad: #d93025; --warn: #b06000;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --page: #0d0d0d; --surface: #1a1a19; --panel: #232322; --line: #34342f; --ink: #fff; --ink2: #c3c2b7; --ink3: #8f8e86; --accent: #3987e5; --good: #5bb974; --bad: #f28b82; --warn: #fdd663; }
+}
+:root[data-theme="dark"] { --page: #0d0d0d; --surface: #1a1a19; --panel: #232322; --line: #34342f; --ink: #fff; --ink2: #c3c2b7; --ink3: #8f8e86; --accent: #3987e5; --good: #5bb974; --bad: #f28b82; --warn: #fdd663; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--page); color: var(--ink); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+header { display: flex; align-items: center; gap: 6px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--surface); height: 44px; flex: none; }
+header h1 { font-size: 15px; margin: 0 14px 0 4px; font-weight: 600; white-space: nowrap; }
+header button { font: inherit; color: var(--ink2); background: none; border: none; border-radius: 8px; padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+header button:hover { color: var(--ink); background: var(--panel); }
+header button.on { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); border-radius: 8px 8px 0 0; }
+header button .n { color: var(--ink3); font-size: 12px; margin-left: 4px; font-variant-numeric: tabular-nums; }
+header .spacer { flex: 1; }
+header .now { color: var(--ink3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 44vw; }
+header .now.stale { color: var(--warn); }
+main { flex: 1; min-height: 0; overflow: auto; }
+.pane { display: none; padding: 20px 24px 40px; max-width: 1100px; }
+.pane.on { display: block; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink3); margin: 22px 0 8px; font-weight: 600; }
+h2:first-child { margin-top: 0; }
+h2 .sum { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
+.note { color: var(--ink2); max-width: 620px; }
+.note code, code { font-family: var(--mono); font-size: 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.chips button { font: inherit; font-size: 13px; color: var(--ink2); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.chips button:hover { color: var(--ink); }
+.chips button.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.num { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12.5px; }
+/* report rows */
+.rep { border-radius: 8px; }
+.rep > .row { display: grid; grid-template-columns: 110px 64px 1fr 84px 96px 110px; gap: 14px; align-items: baseline; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.rep > .row:hover { background: var(--panel); }
+.rep.open > .row { background: var(--panel); border-radius: 8px 8px 0 0; }
+.row .mac { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .t { color: var(--ink2); }
+.row .why { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .why .tag { color: var(--ink3); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; margin-left: 6px; }
+.row .r { text-align: right; white-space: nowrap; }
+.row .rej { color: var(--bad); }
+.detail { background: var(--panel); border-radius: 0 0 8px 8px; padding: 4px 10px 12px; margin-bottom: 6px; display: grid; grid-template-columns: minmax(260px, 1fr) minmax(260px, 1.3fr); gap: 18px; align-items: start; }
+.detail dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 8px 0 0; font-size: 13px; align-content: start; }
+.detail dt { color: var(--ink3); }
+.detail dd { margin: 0; }
+.detail pre { font-family: var(--mono); font-size: 12px; line-height: 1.5; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink2); }
+/* macs */
+.macs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.card .top { display: flex; align-items: baseline; gap: 8px; }
+.card .top .name { font-weight: 600; font-size: 15px; }
+.card .top .st { font-size: 12px; margin-left: auto; white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ink3); margin-right: 6px; vertical-align: 1px; }
+.dot.good { background: var(--good); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.card .big { font-size: 22px; font-weight: 600; margin: 8px 0 2px; font-variant-numeric: tabular-nums; }
+.card .big small { font-size: 13px; font-weight: 400; color: var(--ink3); }
+.card dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 10px 0 0; font-size: 13px; }
+.card dt { color: var(--ink3); }
+.card dd { margin: 0; overflow-wrap: anywhere; }
+.card .foot { color: var(--ink3); font-size: 12px; margin-top: 10px; }
+.card .foot.warn { color: var(--warn); }
+/* totals */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.tile .k { color: var(--ink3); font-size: 12px; }
+.tile .v { font-size: 22px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tile .s { color: var(--ink3); font-size: 12px; margin-top: 2px; }
+.bar { height: 6px; border-radius: 3px; background: var(--panel); margin-top: 8px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--ink3); font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th.r, td.r { text-align: right; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 0 0 14px; }
+.seg button { font: inherit; font-size: 13px; color: var(--ink2); background: var(--surface); border: none; padding: 5px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { color: var(--ink); background: var(--panel); font-weight: 500; }
+@media (max-width: 760px) {
+  header { overflow-x: auto; scrollbar-width: none; } header::-webkit-scrollbar { display: none; }
+  header button { padding: 7px 9px; } header h1 { display: none; } header .now { display: none; }
+  .pane { padding: 14px 16px 32px; }
+  .rep > .row { grid-template-columns: 1fr auto; gap: 2px 12px; }
+  .row .t, .row .hs { display: none; }
+  .row .why { grid-column: 1; } .row .up { grid-column: 2; grid-row: 1; } .row .sh { grid-column: 2; }
+  .detail { grid-template-columns: 1fr; }
+  .wide { overflow-x: auto; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>XMR Miner hub</h1>
+  <button data-tab="reports">Reports<span class="n" id="n-reports"></span></button>
+  <button data-tab="macs">Macs<span class="n" id="n-macs"></span></button>
+  <button data-tab="totals">Totals</button>
+  <span class="spacer"></span>
+  <span class="now" id="now"></span>
+</header>
+<main>
+  <section class="pane" id="reports"></section>
+  <section class="pane" id="macs"></section>
+  <section class="pane" id="totals"></section>
+</main>
+<script>
+(function () {
+  const SNAPSHOT = /*HUB_DATA*/null;   // the Desktop copy carries its data here; the live page fetches it
+  const $ = (s) => document.querySelector(s);
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const nf = (v, d = 0) => v == null || isNaN(v) ? '—' : Number(v).toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d });
+  const dur = (s) => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`; };
+  const hours = (s) => (s || 0) / 3600 >= 10 ? nf(s / 3600) + ' h' : nf((s || 0) / 3600, 1) + ' h';
+  const two = (n) => String(n).padStart(2, '0');
+  const clock = (ts) => { const d = new Date(ts * 1000); return `${two(d.getHours())}:${two(d.getMinutes())}`; };
+  const dayKey = (ts) => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
+  const dayName = (key) => {
+    const now = new Date(); const today = dayKey(now / 1000); const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (key === today) return 'Today'; if (key === dayKey(y / 1000)) return 'Yesterday';
+    const [yy, mm, dd] = key.split('-').map(Number); return new Date(yy, mm - 1, dd).toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short' });
+  };
+  const ago = (ts, now) => { if (!ts) return '—'; const s = Math.max(0, now - ts); return s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`; };
+  const speed = (r) => r.hs15 != null ? r.hs15 : r.hs60 != null ? r.hs60 : r.hs10;
+  const WHY = { window: 'stopped in the window', cli: 'stopped from Terminal', schedule: 'end of mining hours', update: 'stopped for an update', watchdog: 'stopped by the watchdog' };
+  const why = (r) => r.why === 'remote' ? `stopped from ${esc((r.by || 'the main Mac').replace(/^minerv3-/, ''))}` : WHY[r.why] || 'stopped';
+  const STATE = { mining: ['good', 'mining'], starting: ['warn', 'starting'], paused: ['warn', 'paused'], pool: ['good', 'mining (pool view)'], stopped: ['', 'stopped'], offline: ['bad', 'offline'], idle: ['', 'idle'], 'no token': ['bad', 'token differs'], error: ['bad', 'error'] };
+
+  let data = SNAPSHOT, tab = 'reports', mac = 'all', span = 7, open = new Set(), failed = 0;
+  try { const q = new URL(location.href); tab = q.searchParams.get('tab') || tab; mac = q.searchParams.get('mac') || mac; } catch (e) {}
+
+  function setTab(t) {
+    tab = t; for (const b of document.querySelectorAll('header button')) b.classList.toggle('on', b.dataset.tab === t);
+    for (const p of document.querySelectorAll('.pane')) p.classList.toggle('on', p.id === t);
+    try { const q = new URL(location.href); q.searchParams.set('tab', t); if (mac !== 'all') q.searchParams.set('mac', mac); else q.searchParams.delete('mac'); history.replaceState(null, '', q); } catch (e) {}
+  }
+  function names(d) { const s = []; for (const m of d.macs || []) if (!s.includes(m.mac)) s.push(m.mac); for (const r of d.reports || []) if (!s.includes(r.mac)) s.push(r.mac); return s; }
+
+  function renderReports(d) {
+    const all = d.reports || [], macs = names(d);
+    const reps = all.filter((r) => mac === 'all' || r.mac === mac);
+    let h = `<div class="chips">${['all', ...macs].map((m) => `<button data-mac="${esc(m)}" class="${m === mac ? 'on' : ''}">${m === 'all' ? 'Every Mac' : esc(m)}${m === 'all' ? '' : ` <span class="num" style="opacity:.7">${all.filter((r) => r.mac === m).length}</span>`}</button>`).join('')}</div>`;
+    if (!reps.length) {
+      return h + `<p class="note">${all.length ? 'No reports from this Mac yet.' : 'No reports yet.'} Each Mac leaves one every time it stops mining (you, the main Mac, or the end of its hours), and this Mac collects them every 20 seconds while its helper runs. A Mac that stopped while this one was off is picked up the next time both are on.</p>`;
+    }
+    let day = '';
+    for (const r of reps) {
+      const k = dayKey(r.ts);
+      if (k !== day) {
+        day = k; const same = reps.filter((x) => dayKey(x.ts) === k);
+        const up = same.reduce((a, x) => a + (x.up || 0), 0), acc = same.reduce((a, x) => a + (x.acc || 0), 0);
+        h += `<h2>${dayName(k)}<span class="sum">${same.length} session${same.length > 1 ? 's' : ''} · ${dur(up)} mined · ${nf(acc)} shares</span></h2>`;
+      }
+      const hs = speed(r), isOpen = open.has(r.id);
+      h += `<div class="rep${isOpen ? ' open' : ''}" data-id="${esc(r.id)}"><div class="row">
+        <span class="mac">${esc(r.mac)}</span>
+        <span class="t num">${clock(r.ts)}</span>
+        <span class="why">${why(r)}${r.partial ? '<span class="tag">event log</span>' : ''}</span>
+        <span class="r up num">${dur(r.up)}</span>
+        <span class="r hs num">${hs == null ? '—' : nf(hs) + ' H/s'}</span>
+        <span class="r sh num">${nf(r.acc)} ✓${r.rej ? ` <span class="rej">${nf(r.rej)} ✗</span>` : ''}</span>
+      </div>${isOpen ? detail(r) : ''}</div>`;
+    }
+    return h;
+  }
+  function detail(r) {
+    const t0 = r.started ? new Date(r.started * 1000) : null, t1 = new Date(r.ts * 1000);
+    const fmt = (d) => d.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    const tot = (r.acc || 0) + (r.rej || 0);
+    const rows = [['Mac', esc(r.worker)], ['Started', t0 ? fmt(t0) : '—'], ['Stopped', fmt(t1)], ['Mined for', dur(r.up)], ['Why', why(r)]];
+    if (!r.partial) rows.push(['Speed', `${nf(r.hs10)} · ${nf(r.hs60)} · ${nf(r.hs15)} H/s <span style="color:var(--ink3)">(10 s · 60 s · 15 min)</span>`], ['Highest', r.highest == null ? '—' : nf(r.highest) + ' H/s']);
+    rows.push(['Shares', `${nf(r.acc)} accepted · ${nf(r.rej)} rejected${tot ? ` · ${nf(100 * (r.acc || 0) / tot, 1)}%` : ''}`]);
+    if (!r.partial) rows.push(['Pool', esc(r.pool || '—')], ['Threads', r.threads || r.mode ? `${esc(r.threads || '—')}${r.mode ? ` · ${esc(r.mode)} mode` : ''}` : '—'], ['Ping', r.ping == null ? '—' : nf(r.ping) + ' ms'], ['xmrig', esc(r.version || '—')]);
+    const right = r.partial
+      ? `<p class="note" style="margin-top:8px">From the event log: this stop was before Macs kept full reports, so there are no speeds or pool details. Every stop from now on has the full report.</p>`
+      : `<pre>${esc(r.text || '')}</pre>${r.file ? `<div style="color:var(--ink3);font-size:12px;margin-top:6px">On ${esc(r.mac)}'s Desktop as <code>${esc(r.file)}</code></div>` : ''}`;
+    return `<div class="detail"><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl><div>${right}</div></div>`;
+  }
+
+  function stats(reps, since) {
+    const out = {};
+    for (const r of reps) {
+      if (since && r.ts < since) continue;
+      const s = out[r.mac] || (out[r.mac] = { n: 0, up: 0, acc: 0, rej: 0, hsUp: 0, hsW: 0, last: 0 });
+      s.n++; s.up += r.up || 0; s.acc += r.acc || 0; s.rej += r.rej || 0; s.last = Math.max(s.last, r.ts);
+      const hs = speed(r); if (hs != null && r.up) { s.hsUp += hs * r.up; s.hsW += r.up; }
+    }
+    return out;
+  }
+  function renderMacs(d) {
+    const now = d.at || Date.now() / 1000, week = stats(d.reports || [], now - 7 * 86400), last = {};
+    for (const r of d.reports || []) if (!last[r.mac]) last[r.mac] = r;
+    const macs = [...(d.macs || [])];
+    for (const n of names(d)) if (!macs.some((m) => m.mac === n)) macs.push({ mac: n, worker: 'minerv3-' + n, state: 'offline', note: 'not seen by the fleet right now' });
+    if (!macs.length) return `<p class="note">No Macs seen yet: the fleet view fills in within a minute of the keeper starting.</p>`;
+    return `<div class="macs">${macs.map((m) => {
+      const [tone, label] = STATE[m.state] || ['', m.state || '—']; const w = week[m.mac] || { n: 0, up: 0, acc: 0 }; const lr = last[m.mac];
+      const hs = m.hs != null ? m.hs : m.pool_hs;
+      const tokenLine = m.token === 'old' ? `<div class="foot warn">Still on the old fleet token: it gets the new one while XMR Miner is open there.</div>`
+        : m.token === 'new' ? `<div class="foot">Has the new fleet token.</div>` : '';
+      return `<div class="card">
+        <div class="top"><span class="name">${esc(m.mac)}</span>${m.here ? '<span style="color:var(--ink3);font-size:12px">this Mac</span>' : ''}<span class="st"><span class="dot ${tone}"></span>${esc(label)}</span></div>
+        <div class="big">${hs ? nf(hs) : '0'} <small>H/s now</small></div>
+        <dl>
+          <dt>Last 24 h</dt><dd>${m.up24 == null ? '—' : 'up ' + nf(100 * m.up24) + '%'}</dd>
+          <dt>Last report</dt><dd>${lr ? `${dayName(dayKey(lr.ts))} ${clock(lr.ts)} · ${dur(lr.up)} · ${nf(lr.acc)} ✓` : 'none yet'}</dd>
+          <dt>7 days</dt><dd>${w.n ? `${w.n} session${w.n > 1 ? 's' : ''} · ${hours(w.up)} · ${nf(w.acc)} shares` : 'no sessions'}</dd>
+          ${m.note ? `<dt>Note</dt><dd>${esc(m.note)}</dd>` : ''}
+          ${m.state === 'offline' && m.seen ? `<dt>Seen</dt><dd>${ago(m.seen, now)}</dd>` : ''}
+        </dl>${tokenLine}
+      </div>`;
+    }).join('')}</div>`;
+  }
+  function renderTotals(d) {
+    const now = d.at || Date.now() / 1000, reps = d.reports || [];
+    const since = span ? now - span * 86400 : 0, st = stats(reps, since), macs = Object.keys(st);
+    const sum = (k) => macs.reduce((a, m) => a + st[m][k], 0);
+    const n = sum('n'), up = sum('up'), acc = sum('acc'), rej = sum('rej'), hsUp = sum('hsUp'), hsW = sum('hsW');
+    const b = d.balance || null;
+    const pct = b && b.threshold ? Math.min(100, 100 * (b.due || 0) / b.threshold) : null;
+    let h = `<div class="seg">${[[1, 'Today'], [7, '7 days'], [30, '30 days'], [0, 'All']].map(([v, l]) => `<button data-span="${v}" class="${v === span ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+    h += `<div class="tiles">
+      <div class="tile"><div class="k">Mined</div><div class="v">${hours(up)}</div><div class="s">${n} session${n === 1 ? '' : 's'} on ${macs.length} Mac${macs.length === 1 ? '' : 's'}</div></div>
+      <div class="tile"><div class="k">Shares</div><div class="v">${nf(acc)}</div><div class="s">${rej ? `${nf(rej)} rejected · ${nf(100 * acc / (acc + rej), 1)}% good` : 'none rejected'}</div></div>
+      <div class="tile"><div class="k">Average speed while mining</div><div class="v">${hsW ? nf(hsUp / hsW) : '—'}<span style="font-size:13px;font-weight:400;color:var(--ink3)"> H/s</span></div><div class="s">${hsW ? 'per session, weighted by its length' : 'needs full reports (new stops)'}</div></div>
+      <div class="tile"><div class="k">Pool balance</div><div class="v">${b ? nf(b.due, 5) : '—'}<span style="font-size:13px;font-weight:400;color:var(--ink3)"> XMR</span></div><div class="s">${b ? `paid ${nf(b.paid, 4)} · payout at ${b.threshold == null ? '—' : nf(b.threshold, 2)}${pct == null ? '' : ` · ${nf(pct, 1)}%`}` : 'the pool has not answered yet'}</div>${pct == null ? '' : `<div class="bar"><i style="width:${pct.toFixed(2)}%"></i></div>`}</div>
+    </div>`;
+    h += `<h2>Per Mac</h2><div class="wide"><table><thead><tr><th>Mac</th><th class="r">Sessions</th><th class="r">Mined</th><th class="r">Shares</th><th class="r">Rejected</th><th class="r">Avg H/s</th><th class="r">Last stop</th></tr></thead><tbody>
+      ${macs.sort((a, c) => st[c].up - st[a].up).map((m) => { const s = st[m]; return `<tr><td>${esc(m)}</td><td class="r num">${s.n}</td><td class="r num">${hours(s.up)}</td><td class="r num">${nf(s.acc)}</td><td class="r num">${nf(s.rej)}</td><td class="r num">${s.hsW ? nf(s.hsUp / s.hsW) : '—'}</td><td class="r num">${dayName(dayKey(s.last))} ${clock(s.last)}</td></tr>`; }).join('') || `<tr><td colspan="7" style="color:var(--ink3)">No sessions in this span.</td></tr>`}
+    </tbody></table></div>`;
+    return h;
+  }
+
+  function render() {
+    const d = data || { reports: [], macs: [] };
+    $('#n-reports').textContent = (d.reports || []).length || '';
+    $('#n-macs').textContent = (d.macs || []).length || '';
+    $('#reports').innerHTML = renderReports(d);
+    $('#macs').innerHTML = renderMacs(d);
+    $('#totals').innerHTML = renderTotals(d);
+    const now = $('#now');
+    if (SNAPSHOT) { now.textContent = `snapshot from ${dayName(dayKey(d.at))} ${clock(d.at)} · live: /hub in XMR Miner`; now.classList.remove('stale'); }
+    else if (failed > 1) { now.textContent = `the keeper stopped answering · last data ${clock(d.at || 0)}`; now.classList.add('stale'); }
+    else if (data) { now.textContent = `live · collected ${clock(d.collected || d.at)} · every 20 s`; now.classList.remove('stale'); }
+    else now.textContent = 'reading…';
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('header button'); if (b) { setTab(b.dataset.tab); return; }
+    const c = e.target.closest('.chips button'); if (c) { mac = c.dataset.mac; setTab(tab); render(); return; }
+    const s = e.target.closest('.seg button'); if (s) { span = Number(s.dataset.span); render(); return; }
+    const r = e.target.closest('.rep > .row'); if (r) { const id = r.parentElement.dataset.id; open.has(id) ? open.delete(id) : open.add(id); render(); }
+  });
+  async function pull() {
+    try { const r = await fetch('/hub/data.json', { cache: 'no-store' }); if (!r.ok) throw new Error(r.status); data = await r.json(); failed = 0; }
+    catch (e) { failed++; }
+    render();
+  }
+  setTab(['reports', 'macs', 'totals'].includes(tab) ? tab : 'reports');
+  render();
+  if (!SNAPSHOT) { pull(); setInterval(pull, 10000); }
+})();
+</script>
+</body>
+</html>

@@ -37,7 +37,8 @@ ROOT = os.environ.get("MINER_ROOT") or os.path.abspath(os.path.join(os.path.dirn
 PORT = 18088
 CTL_PORT = 18089  # bin/control.py's helper on every Mac but the main one
 LOCAL = "127.0.0.1"
-TOKEN_FILE = os.path.join(ROOT, "fleet.token")
+TOKEN_FILE = os.path.join(ROOT, "fleet.token")          # tracked: the old token, public since the repo is
+TOKEN_LOCAL = os.path.join(ROOT, "fleet.token.local")   # never in git: this Mac's token, then older ones
 HOSTS_FILE = os.path.join(ROOT, "fleet.local")
 WALLET_FILE = os.path.join(ROOT, "wallet.local")
 PLIST = os.path.join(ROOT, "com.minerv3.xmrig.plist")
@@ -71,9 +72,52 @@ def read_first(path: str) -> str:
     return ""
 
 
+def read_lines(path: str) -> list[str]:
+    """Every line that is not blank or a # comment, stripped."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+    except OSError:
+        return []
+
+
+def read_tokens() -> list[str]:
+    """Every token this Mac knows, the one it answers to first: fleet.token.local (not in git; its
+    first line is this Mac's token, the lines under it older ones), then the tracked fleet.token (the
+    old one, public since the repo is). The older ones only reach Macs that have not got the new one."""
+    out: list[str] = []
+    for tok in read_lines(TOKEN_LOCAL) + read_lines(TOKEN_FILE)[:1]:
+        tok = tok.replace(" ", "")
+        if _TOKEN_OK.match(tok) and tok not in out:
+            out.append(tok)
+    return out
+
+
 def read_token() -> str:
-    tok = read_first(TOKEN_FILE).replace(" ", "")
-    return tok if _TOKEN_OK.match(tok or "") else ""
+    """The token this Mac's xmrig API and helper answer to."""
+    toks = read_tokens()
+    return toks[0] if toks else ""
+
+
+def token_ok(tok: str) -> bool:
+    return bool(tok) and 20 <= len(tok) <= 200 and bool(_TOKEN_OK.match(tok))
+
+
+def save_token(tok: str, path: Optional[str] = None) -> None:
+    """Make tok this Mac's token (the first line of fleet.token.local), keeping the ones it had as older
+    lines so the main Mac can still reach Macs that have not got it yet. Owner-only permissions."""
+    path = path or TOKEN_LOCAL
+    keep = [t for t in read_lines(path) if t != tok][:4]
+    old = read_lines(TOKEN_FILE)[:1]
+    keep += [t for t in old if t != tok and t not in keep]
+    body = ("# XMR Miner: this Mac's fleet token (first line) and older ones under it. Never in git.\n"
+            "# The main Mac makes it (minerctl token new) and hands it to the other Macs itself.\n"
+            + "\n".join([tok] + keep) + "\n")
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(body)
+    os.replace(tmp, path)
 
 
 def read_wallet() -> str:
@@ -177,11 +221,22 @@ def http_json(url: str, token: str = "", timeout: float = 1.5):
         return None, classify(e)
 
 
-def api_json(url: str, token: str = "", timeout: float = 1.5):
-    """http_json with the token, retried bare on auth: an xmrig started before fleet.token
-    existed answers 401 to any Authorization header."""
-    d, st = http_json(url, token, timeout)
-    if st == "auth" and token:
+def toks(token) -> list[str]:
+    """One token or a list of them (this Mac's first, then older ones), as a list."""
+    return [t for t in ([token] if isinstance(token, str) else list(token or [])) if t]
+
+
+def api_json(url: str, token="", timeout: float = 1.5):
+    """http_json with the token (or each token in turn: a Mac that has not got the new one yet
+    answers to an older one), retried bare on auth: an xmrig started before fleet.token existed
+    answers 401 to any Authorization header."""
+    ts = toks(token)
+    d, st = http_json(url, ts[0] if ts else "", timeout)
+    for t in ts[1:]:
+        if st != "auth":
+            break
+        d, st = http_json(url, t, timeout)
+    if st == "auth" and ts:
         d2, st2 = http_json(url, "", timeout)
         if st2 == "ok":
             return d2, st2
@@ -220,18 +275,24 @@ def brief(d: dict) -> dict:
     }
 
 
-def poll(host: str, port: int, token: str, timeout: float = 1.5) -> dict:
+def poll(host: str, port: int, token, timeout: float = 1.5) -> dict:
     d, st = api_json(f"http://{host}:{port}/2/summary", token, timeout)
     ok = st == "ok" and isinstance(d, dict) and "hashrate" in d
     return {"host": host, "port": port, "status": "ok" if ok else (st if st != "ok" else "error"),
             "brief": brief(d) if ok else None, "at": time.time()}
 
 
-def hello(host: str, token: str, timeout: float = 1.5) -> tuple:
-    """(answer, status) from a Mac's control helper: worker, window open, xmrig running, what it takes."""
-    d, st = http_json(f"http://{host}:{CTL_PORT}/v1/hello", token, timeout)
-    if st == "ok" and isinstance(d, dict) and d.get("worker"):
-        return d, "ok"
+def hello(host: str, token, timeout: float = 1.5) -> tuple:
+    """(answer, status) from a Mac's control helper: worker, window open, xmrig running, what it takes.
+    With several tokens each is tried in turn; answer["tok_i"] says which one it took (0 = this Mac's)."""
+    ts = toks(token) or [""]
+    for i, t in enumerate(ts):
+        d, st = http_json(f"http://{host}:{CTL_PORT}/v1/hello", t, timeout)
+        if st == "ok" and isinstance(d, dict) and d.get("worker"):
+            d["tok_i"] = i
+            return d, "ok"
+        if st != "auth":
+            break
     return None, (st if st != "ok" else "error")
 
 
@@ -318,7 +379,7 @@ def subnet_hosts(ip: str, prefix: int) -> list[str]:
     return [str(h) for h in net.hosts() if str(h) != ip]
 
 
-def scan(token: str, port: int = PORT, connect_timeout: float = 0.35) -> list[dict]:
+def scan(token, port: int = PORT, connect_timeout: float = 0.35) -> list[dict]:
     """Every host on this subnet whose :port answers like an xmrig API with our token, or whose
     control helper (:18089) does: a Mac with XMR Miner open but its miner stopped."""
     me = own_ipv4()
@@ -370,7 +431,8 @@ class Fleet:
     """State for one viewer: who to poll, the last LAN + pool answers, and the merged rows."""
 
     def __init__(self) -> None:
-        self.token = read_token()
+        self.tokens = read_tokens()  # this Mac's first; older ones reach Macs that have not got it yet
+        self.token = self.tokens[0] if self.tokens else ""
         self.wallet = read_wallet()
         self.me = local_worker()
         self.cache = load_cache()  # {"peers": {worker: {host, port, seen}}, "scanned": ts}
@@ -416,10 +478,10 @@ class Fleet:
 
     def refresh_lan(self) -> None:
         ts = self.targets()
-        peers = [t for t in ts if t[0] != LOCAL] if self.token else []
+        peers = [t for t in ts if t[0] != LOCAL] if self.tokens else []
         with ThreadPoolExecutor(max(1, len(ts) + len(peers))) as ex:
-            polls = [ex.submit(lambda t: dict(poll(t[0], t[1], self.token), src=t[2]), t) for t in ts]
-            hellos = {t[0]: ex.submit(hello, t[0], self.token) for t in peers}
+            polls = [ex.submit(lambda t: dict(poll(t[0], t[1], self.tokens), src=t[2]), t) for t in ts]
+            hellos = {t[0]: ex.submit(hello, t[0], self.tokens) for t in peers}
             res = [f.result() for f in polls]
             ctl = {h: f.result() for h, f in hellos.items()}
         for r in res:
@@ -457,7 +519,7 @@ class Fleet:
         return any(v["hs"] > 0 and w not in found for w, v in self.pool.items())
 
     def do_scan(self) -> list:
-        found = scan(self.token)
+        found = scan(self.tokens)
         with self.lock:
             self.scan_at = time.time()
             self.cache["scanned"] = int(self.scan_at)
@@ -489,7 +551,7 @@ class Fleet:
             hi = c.get("hello")
             base = {"here": here, "host": r["host"], "via": "lan", "pool_hs": None, "lts": None, "pool_acc": None,
                     "hs": None, "hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "failures": None,
-                    "note": "", "ctl": hi, "ctl_st": c.get("status")}
+                    "note": "", "ctl": hi, "ctl_st": c.get("status"), "tok_i": (hi or {}).get("tok_i", 0)}
             if b:
                 w = self.me if (here and self.me) else (b["worker"] or r["host"])
                 row = dict(base, worker=w, state=b["state"], hs=b["hs"], hs15=b["hs15"], acc=b["acc"],
@@ -512,7 +574,7 @@ class Fleet:
             if row is None:
                 row = rows[w] = {"worker": w, "here": w == self.me, "host": "", "via": "pool", "hs": None,
                                  "hs15": None, "acc": None, "rej": None, "up": None, "ping": None, "failures": None,
-                                 "ctl": None, "ctl_st": None,
+                                 "ctl": None, "ctl_st": None, "tok_i": 0,
                                  "state": "pool" if fresh else "idle",
                                  "note": "" if fresh else "no share for a while"}
                 if fresh and not row["here"]:
@@ -535,6 +597,11 @@ class Fleet:
                 "pool": self.pool_status, "pool_at": self.pool_at,
                 "pool_total": sum(p["hs"] for p in self.pool.values()), "balance": self.balance,
                 "scan_at": self.scan_at, "token": bool(self.token), "at": time.time()}
+
+    def token_for(self, r: dict) -> str:
+        """The token a Mac's helper took last time (tok_i): its own until the main Mac hands it the new one."""
+        i = int(r.get("tok_i") or 0)
+        return self.tokens[i] if 0 <= i < len(self.tokens) else self.token
 
 
 class Watcher:
@@ -629,7 +696,7 @@ def here() -> int:
     print("This Mac")
     print(f"  worker     {local_worker() or '—'}")
     print(f"  job file   API on {host}:{PORT}" + (" (LAN)" if host == "0.0.0.0" else " (this Mac only)"))
-    print(f"  token      {'fleet.token' if tok else 'missing'}")
+    print(f"  token      {('fleet.token.local (not in git)' if read_lines(TOKEN_LOCAL) else 'fleet.token (the old, public one)') if tok else 'missing'}")
     print(f"  LAN        {me[0]}/{me[1]}" if me else "  LAN        offline")
     print(f"  local API  {loc['status']}" + (f" · {fmt_hs(loc['brief']['hs'])} H/s · worker_id {loc['brief']['worker']}" if loc["brief"] else ""))
     if lan:
@@ -637,7 +704,7 @@ def here() -> int:
     print(f"  firewall   {'on' if fw else 'off' if fw is False else '?'}")
     tips = []
     if not tok:
-        tips.append("fleet.token is missing: ./bin/minerctl.sh update (it is tracked in the repo).")
+        tips.append("no fleet token: ./bin/minerctl.sh update, then open XMR Miner (the main Mac hands over the new one).")
     if host != "0.0.0.0" and tok:
         tips.append("The job file keeps the API local (LAN=off in machine.local?).")
     if loc["status"] == "ok" and lan and lan["status"] != "ok" and host == "0.0.0.0":
@@ -750,6 +817,33 @@ def self_test() -> int:
     rr = {r["worker"]: r for r in f.rows(now)}
     check("rows carry up24 (0 for a Mac missing from the chart) and when a peer was last seen",
           rr["minerv3-m2-8gb"]["up24"] == 0.5 and rr["minerv3-i7-6700hq-16gb"]["up24"] == 0.0)
+    # tokens: fleet.token.local first (not in git), the tracked one last; the main Mac's hand-over keeps the old ones
+    global TOKEN_FILE, TOKEN_LOCAL
+    old_files = (TOKEN_FILE, TOKEN_LOCAL)
+    td = tempfile.mkdtemp(prefix="fleet-test-")
+    try:
+        TOKEN_FILE, TOKEN_LOCAL = os.path.join(td, "fleet.token"), os.path.join(td, "fleet.token.local")
+        with open(TOKEN_FILE, "w") as fh:
+            fh.write("# the old one\n" + "o" * 32 + "\n")
+        check("tokens: only the tracked one", read_tokens() == ["o" * 32] and read_token() == "o" * 32)
+        save_token("n" * 43)
+        check("tokens: the new one first, the old one kept for Macs that lack it", read_tokens() == ["n" * 43, "o" * 32]
+              and oct(os.stat(TOKEN_LOCAL).st_mode & 0o777) == "0o600")
+        save_token("m" * 43)
+        check("tokens: a second rotation keeps both older ones", read_tokens() == ["m" * 43, "n" * 43, "o" * 32])
+        save_token("m" * 43)
+        check("tokens: saving the same one again changes nothing", read_tokens() == ["m" * 43, "n" * 43, "o" * 32])
+        os.remove(TOKEN_FILE)
+        check("tokens: the tracked file can go; the old one stays in the local file", read_tokens()[-1] == "o" * 32)
+        check("token_ok", token_ok("A" * 43) and not token_ok("short") and not token_ok("a b" + "c" * 30))
+        f2 = Fleet()
+        f2.tokens, f2.token = ["new", "old"], "new"
+        check("token_for: the one that Mac took", f2.token_for({"tok_i": 1}) == "old" and f2.token_for({}) == "new"
+              and f2.token_for({"tok_i": 7}) == "new")
+    finally:
+        TOKEN_FILE, TOKEN_LOCAL = old_files
+        import shutil
+        shutil.rmtree(td, ignore_errors=True)
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
     return 0 if fails == 0 else 1
 

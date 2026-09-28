@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Write a small Desktop txt summary of the last miner session. Used on stop/kill."""
+"""Write a small Desktop txt summary of the last miner session. Used on stop/kill.
+
+Every report is also kept as one JSON line in logs/reports.jsonl (--why / --by say who stopped it):
+the main Mac collects every Mac's reports from there into its hub (bin/control.py, /hub)."""
 from __future__ import annotations
 
 import argparse
@@ -7,11 +10,13 @@ import json
 import os
 import plistlib
 import sys
+import time
 from datetime import datetime
 from typing import Optional
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SNAP = os.path.join(ROOT, "logs", "last-session.json")
+REPORTS = os.path.join(ROOT, "logs", "reports.jsonl")  # every report as data, for the main Mac's hub
 PLIST = os.path.join(ROOT, "com.minerv3.xmrig.plist")
 DESKTOP = os.path.expanduser("~/Desktop")
 
@@ -178,6 +183,40 @@ def render(snap: dict, reason: str, stopped: Optional[str] = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def num(v):
+    try:
+        return None if v is None else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def report_record(snap: dict, reason: str, why: str, by: str, text: str, path: str, now: Optional[float] = None) -> dict:
+    """The report as data: what the hub shows for this session (and the same text as the Desktop file)."""
+    now = round(now or time.time(), 3)
+    try:
+        up = max(0, int(snap.get("up") or 0))
+    except (TypeError, ValueError):
+        up = 0
+    hp = snap.get("hugepages")
+    return {
+        "ts": now, "k": "report", "worker": snap.get("worker") or worker_from_plist() or "",
+        "why": why or "cli", "by": by or "", "reason": reason, "started": round(now - up, 3) if up else None, "up": up,
+        "hs10": num(snap.get("hs10") if snap.get("hs10") is not None else snap.get("hs")), "hs60": num(snap.get("hs60")),
+        "hs15": num(snap.get("hs15")), "highest": num(snap.get("highest")),
+        "acc": int(snap.get("acc") or 0), "rej": int(snap.get("rej") or 0),
+        "pool": snap.get("pool") or "", "algo": snap.get("algo") or "", "threads": snap.get("threads"),
+        "mode": snap.get("mode"), "version": snap.get("version"), "ping": num(snap.get("ping")),
+        "failures": snap.get("failures"), "hugepages": fmt_hp(hp) if hp is not None else None,
+        "sampled": snap.get("saved_at"), "file": os.path.basename(path) if path else "", "text": text,
+    }
+
+
+def append_report(rec: dict, path: str = REPORTS) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
 def write_desktop(text: str, desktop: str = DESKTOP) -> str:
     os.makedirs(desktop, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -195,6 +234,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--desktop", default=DESKTOP)
     p.add_argument("--self-test", action="store_true")
     p.add_argument("--stdout-only", action="store_true", help="print summary, do not write a file")
+    p.add_argument("--why", default="", help="who stopped it: window | cli | remote | schedule | update …")
+    p.add_argument("--by", default="", help="the Mac that asked (a stop from the main Mac)")
+    p.add_argument("--no-desktop", action="store_true", help="keep the report for the hub only (the hours' end)")
+    p.add_argument("--reports", default=REPORTS)
     args = p.parse_args(argv)
 
     if args.self_test:
@@ -235,7 +278,23 @@ def main(argv: Optional[list[str]] = None) -> int:
         from_api = snapshot_from_api(api)
         host_ok = from_api.get("worker") != "Christians-Mac-mini-2.local"
         print("ok  worker is not the host name" if host_ok else "FAIL worker leaked host name: " + str(from_api.get("worker")))
-        if not ok or not host_ok:
+        import tempfile
+        td = tempfile.mkdtemp(prefix="summary-test-")
+        rp = os.path.join(td, "logs", "reports.jsonl")
+        t_stop = datetime(2026, 9, 12, 12, 34).timestamp()
+        append_report(report_record(snap, "stop", "remote", "minerv3-m4-16gb", text, "/x/XMR-miner-summary-1.txt", t_stop), rp)
+        append_report(report_record({"acc": 3}, "stop", "", "", "t", "", t_stop + 60), rp)
+        rows = [json.loads(ln) for ln in open(rp)]
+        r0 = rows[0]
+        rec_ok = (len(rows) == 2 and r0["k"] == "report" and r0["worker"] == "minerv3-m4-16gb" and r0["up"] == 58080
+                  and r0["started"] == round(t_stop - 58080, 3) and r0["hs15"] == 4166.0 and r0["acc"] == 1945
+                  and r0["why"] == "remote" and r0["by"] == "minerv3-m4-16gb" and r0["hugepages"] == "0/1178"
+                  and r0["file"] == "XMR-miner-summary-1.txt" and "1945 accepted" in r0["text"]
+                  and rows[1]["why"] == "cli" and rows[1]["started"] is None and rows[1]["hs15"] is None)
+        print("ok  report kept as data for the hub" if rec_ok else "FAIL report record: " + json.dumps(rows)[:400])
+        import shutil
+        shutil.rmtree(td, ignore_errors=True)
+        if not ok or not host_ok or not rec_ok:
             return 1
         return 0
 
@@ -245,8 +304,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.stdout_only:
         sys.stdout.write(text)
         return 0
-    path = write_desktop(text, args.desktop)
-    print(f"Desktop summary: {path}")
+    path = "" if args.no_desktop else write_desktop(text, args.desktop)
+    try:
+        append_report(report_record(snap, args.reason, args.why, args.by, text, path), args.reports)
+    except OSError as e:
+        print(f"report not kept for the hub: {e}", file=sys.stderr)
+    if path:
+        print(f"Desktop summary: {path}")
     return 0
 
 
