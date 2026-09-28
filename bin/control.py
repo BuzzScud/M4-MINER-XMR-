@@ -1799,14 +1799,16 @@ def cli_hub(args: list[str]) -> int:
         return 1
     state = ensure()
     d, st = None, ""
-    for _ in range(50):
+    t0 = time.time()
+    while time.time() - t0 < 30:  # a keeper that just started answers before its first collection: wait for it
         try:
             with urllib.request.urlopen(urllib.request.Request(hub_url() + "/data.json"), timeout=3) as r:
                 d, st = json.load(r), "ok"
-            break
+            if isinstance(d, dict) and d.get("collected"):
+                break
         except Exception as e:
             st = fleet.classify(e)
-            time.sleep(0.2)
+        time.sleep(0.3)
     if not isinstance(d, dict):
         print(f"The keeper did not answer on {hub_url()} ({st}); see logs/control.log.")
         return 1
