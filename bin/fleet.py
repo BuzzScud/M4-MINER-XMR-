@@ -477,6 +477,8 @@ class Fleet:
             save_cache(self.cache)
 
     def refresh_lan(self) -> None:
+        self.tokens = read_tokens()  # the main Mac may have handed over a new one since the last poll
+        self.token = self.tokens[0] if self.tokens else ""
         ts = self.targets()
         peers = [t for t in ts if t[0] != LOCAL] if self.tokens else []
         with ThreadPoolExecutor(max(1, len(ts) + len(peers))) as ex:

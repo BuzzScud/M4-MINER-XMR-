@@ -291,12 +291,15 @@ def on_backup(conn: Optional[dict], job: Optional[dict]) -> bool:
     return bool(backup) and (conn or {}).get("pool") == backup
 
 
-FLEET_TOKEN = fleet.read_token()
+API_ST = {"st": ""}  # the local API's last answer: "auth" = xmrig runs but refuses every token this window has
 
 
 def api_get(url: str) -> Optional[dict]:
-    """The local API. With fleet.token it wants the token; a pre-token xmrig is retried bare."""
-    d, st = fleet.api_json(url, FLEET_TOKEN, 1.2)
+    """The local API. With the fleet token it wants the token; a pre-token xmrig is retried bare.
+    The tokens are read every time: the main Mac can hand this Mac a new one while the window is open
+    (then xmrig, started after it, wants the new one and a window that kept the old one reads nothing)."""
+    d, st = fleet.api_json(url, fleet.read_tokens(), 1.2)
+    API_ST["st"] = st
     return d if st == "ok" else None
 
 
@@ -1601,6 +1604,10 @@ class App:
                     continue
                 el = max(0.0, time.time() - (self.start_ts or time.time()))
                 frac = min(0.95, el / DATASET_S)
+                if API_ST["st"] == "auth":  # not a slow dataset: this window cannot read the miner at all
+                    bullet(f"{WARN}The miner runs, but its API refuses this window's fleet token{INK}")
+                    tree(f"{SEC}mining is not affected · press q and open XMR Miner again{INK}")
+                    continue
                 bullet(f"{BOLD}Building the RandomX dataset{NOBOLD}")
                 tree(f"{el:>3.0f} s of about {DATASET_S:.0f}  {bar(frac, 30)}  {SEC}2.0 GB · full speed in about a minute{INK}")
             elif k == "dataset":
@@ -3660,6 +3667,26 @@ def self_test() -> int:
     finally:
         control.send, fleet.read_tokens = real_send, real_toks
         a.dump = True
+    seen_tok: list = []
+    real_api = fleet.api_json
+    fleet.api_json = lambda url, tok, t=1.2: seen_tok.append(list(tok)) or ({}, "ok")  # type: ignore
+    fleet.read_tokens = lambda: ["handed-over", "old-token"]  # type: ignore
+    try:
+        api_get("http://127.0.0.1:18088/2/summary")
+    finally:
+        fleet.api_json, fleet.read_tokens = real_api, real_toks
+    check("the window reads its own miner with a token handed over after it opened", seen_tok == [["handed-over", "old-token"]])
+    a = demo_app("home-starting")
+    a.add("dsprog")
+    API_ST["st"] = "auth"
+    try:
+        refused = "\n".join(plain(x) for x in a.compose(a.live()))
+    finally:
+        API_ST["st"] = ""
+    building = "\n".join(plain(x) for x in a.compose(a.live()))
+    check("a refused token says so instead of a dataset bar that never ends",
+          "its API refuses this window's fleet token" in refused and "Building the RandomX dataset" not in refused
+          and "Building the RandomX dataset" in building)
     check("remote commands use the token each Mac answers to (old until it gets the new one)",
           sorted(sent) == [("10.0.0.2", "stop", "old-token"), ("10.0.0.3", "stop", "new-token")])
     print("self-test", "passed" if fails == 0 else f"{fails} failed")
